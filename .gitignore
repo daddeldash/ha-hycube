@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors / tools
+.idea
+.vscode
+.claude/
+.mcp.json
+*.swp
+.DS_Store
+
+# Local files that must never be published
+secrets.yaml
+.storage/
+*.log
+
+# Shell/user dotfiles that must not end up in the repo
+.bash_profile
+.bashrc
+.profile
+.zprofile
+.zshrc
+.gitconfig
+.gitmodules
+.ripgreprc

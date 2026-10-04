@@ -1,0 +1,241 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HyCube",
+        "description": "Local IP address of the HyCube. The default credentials are hycube / hycube.",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "reconfigure": {
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "description": "The HyCube rejected the credentials.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the HyCube.",
+      "invalid_auth": "Invalid credentials."
+    },
+    "abort": {
+      "already_configured": "This HyCube is already configured.",
+      "reauth_successful": "Re-authentication successful.",
+      "reconfigure_successful": "Reconfiguration successful.",
+      "unique_id_mismatch": "This address belongs to a different HyCube."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HyCube options",
+        "data": {
+          "scan_interval": "Realtime poll interval",
+          "status_interval": "Status poll interval",
+          "battery_capacity": "Usable battery capacity",
+          "profile_weeks": "Weeks of history for the profile",
+          "profile_source": "Profile source (optional)",
+          "control_enabled": "Enable battery control",
+          "cmd_standard": "Request for mode Standard",
+          "cmd_hold": "Request for mode Hold",
+          "cmd_grid_charge": "Request for mode Grid charge"
+        },
+        "data_description": {
+          "scan_interval": "/get_values/ - power values. 10 s is a good balance.",
+          "status_interval": "/data_row/ - status flags, changes rarely.",
+          "profile_source": "Energy sensor with history to build the profile from. Empty = this integration's home consumption.",
+          "cmd_standard": "One request per line, sent in order. Default: stop grid charging and restore the battery split (85 % normal operation, 5 % buffer).",
+          "cmd_grid_charge": "{soc} = grid charge target, {current_soc} = current SoC.",
+          "cmd_hold": "Default: stop grid charging and shrink normal operation to {hold_active} (= 100 - current SoC, at least 10) so the reserve starts at the current SoC. Moved up while PV charges. Untested - see README."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_soc": {
+        "name": "Battery state of charge"
+      },
+      "battery_power": {
+        "name": "Battery power"
+      },
+      "battery_charge_power": {
+        "name": "Battery charge power"
+      },
+      "battery_discharge_power": {
+        "name": "Battery discharge power"
+      },
+      "battery_voltage": {
+        "name": "Battery voltage"
+      },
+      "battery_current": {
+        "name": "Battery current"
+      },
+      "grid_power": {
+        "name": "Grid power"
+      },
+      "grid_import_power": {
+        "name": "Grid import power"
+      },
+      "grid_export_power": {
+        "name": "Grid export power"
+      },
+      "grid_power_l1": {
+        "name": "Grid power L1"
+      },
+      "grid_power_l2": {
+        "name": "Grid power L2"
+      },
+      "grid_power_l3": {
+        "name": "Grid power L3"
+      },
+      "grid_voltage": {
+        "name": "Grid voltage"
+      },
+      "grid_voltage_l1": {
+        "name": "Grid voltage L1"
+      },
+      "grid_voltage_l2": {
+        "name": "Grid voltage L2"
+      },
+      "grid_voltage_l3": {
+        "name": "Grid voltage L3"
+      },
+      "grid_current_l1": {
+        "name": "Grid current L1"
+      },
+      "grid_current_l2": {
+        "name": "Grid current L2"
+      },
+      "grid_current_l3": {
+        "name": "Grid current L3"
+      },
+      "grid_frequency": {
+        "name": "Grid frequency"
+      },
+      "home_power": {
+        "name": "Home consumption"
+      },
+      "solar_power": {
+        "name": "Solar power"
+      },
+      "solar1_power": {
+        "name": "Solar string 1 power"
+      },
+      "solar2_power": {
+        "name": "Solar string 2 power"
+      },
+      "solar1_voltage": {
+        "name": "Solar string 1 voltage"
+      },
+      "solar2_voltage": {
+        "name": "Solar string 2 voltage"
+      },
+      "solar1_current": {
+        "name": "Solar string 1 current"
+      },
+      "solar2_current": {
+        "name": "Solar string 2 current"
+      },
+      "inverter_power": {
+        "name": "Inverter power"
+      },
+      "inverter_voltage": {
+        "name": "Inverter voltage"
+      },
+      "inverter_current": {
+        "name": "Inverter current"
+      },
+      "external_power": {
+        "name": "External production power"
+      },
+      "energy_grid_import": {
+        "name": "Grid import energy"
+      },
+      "energy_grid_export": {
+        "name": "Grid export energy"
+      },
+      "energy_battery_charge": {
+        "name": "Battery charge energy"
+      },
+      "energy_battery_discharge": {
+        "name": "Battery discharge energy"
+      },
+      "energy_solar": {
+        "name": "Solar energy"
+      },
+      "energy_external_production": {
+        "name": "External production energy"
+      },
+      "energy_home": {
+        "name": "Home consumption energy"
+      },
+      "battery_stored_energy": {
+        "name": "Battery stored energy"
+      },
+      "battery_empty_estimate": {
+        "name": "Battery empty (forecast, without PV)"
+      },
+      "forecast_next_hour": {
+        "name": "Consumption forecast next hour"
+      },
+      "forecast_rest_of_today": {
+        "name": "Consumption forecast rest of today"
+      },
+      "forecast_next_24h": {
+        "name": "Consumption forecast next 24 h"
+      },
+      "forecast_tomorrow": {
+        "name": "Consumption forecast tomorrow"
+      },
+      "last_backfill": {
+        "name": "Last gap backfill"
+      }
+    },
+    "binary_sensor": {
+      "grid_charging_active": {
+        "name": "Grid charging active"
+      },
+      "battery_schedule_active": {
+        "name": "Battery schedule active"
+      },
+      "eps_enabled": {
+        "name": "Emergency power enabled"
+      },
+      "eps_overload": {
+        "name": "Emergency power overload"
+      }
+    },
+    "select": {
+      "battery_mode": {
+        "name": "Battery mode",
+        "state": {
+          "standard": "Standard (self-consumption)",
+          "hold": "Hold energy level",
+          "grid_charge": "Charge from grid"
+        }
+      }
+    },
+    "number": {
+      "grid_charge_target_soc": {
+        "name": "Grid charge target"
+      }
+    },
+    "button": {
+      "rebuild_profile": {
+        "name": "Rebuild consumption profile"
+      }
+    }
+  }
+}

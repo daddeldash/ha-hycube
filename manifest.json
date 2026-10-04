@@ -1,0 +1,13 @@
+{
+  "domain": "hycube",
+  "name": "HyCube",
+  "codeowners": ["@daddeldash"],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/daddeldash/ha-hycube",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/daddeldash/ha-hycube/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}

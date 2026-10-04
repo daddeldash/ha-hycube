@@ -1,0 +1,241 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HyCube",
+        "description": "Lokale IP-Adresse der HyCube. Standard-Zugangsdaten: hycube / hycube.",
+        "data": {
+          "host": "Host",
+          "username": "Benutzername",
+          "password": "Passwort"
+        }
+      },
+      "reconfigure": {
+        "data": {
+          "host": "Host",
+          "username": "Benutzername",
+          "password": "Passwort"
+        }
+      },
+      "reauth_confirm": {
+        "description": "Die HyCube hat die Zugangsdaten abgelehnt.",
+        "data": {
+          "username": "Benutzername",
+          "password": "Passwort"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "HyCube nicht erreichbar.",
+      "invalid_auth": "Ungültige Zugangsdaten."
+    },
+    "abort": {
+      "already_configured": "Diese HyCube ist bereits eingerichtet.",
+      "reauth_successful": "Neu-Anmeldung erfolgreich.",
+      "reconfigure_successful": "Neukonfiguration erfolgreich.",
+      "unique_id_mismatch": "Unter dieser Adresse antwortet eine andere HyCube."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HyCube Optionen",
+        "data": {
+          "scan_interval": "Abfrageintervall Echtzeitwerte",
+          "status_interval": "Abfrageintervall Status",
+          "battery_capacity": "Nutzbare Batteriekapazität",
+          "profile_weeks": "Wochen Historie für das Profil",
+          "profile_source": "Profil-Quelle (optional)",
+          "control_enabled": "Batteriesteuerung aktivieren",
+          "cmd_standard": "Request für Modus Standard",
+          "cmd_hold": "Request für Modus Halten",
+          "cmd_grid_charge": "Request für Modus Netzladung"
+        },
+        "data_description": {
+          "scan_interval": "/get_values/ - Leistungswerte. 10 s ist ein guter Kompromiss.",
+          "status_interval": "/data_row/ - Statusflags, ändern sich selten.",
+          "profile_source": "Energiesensor mit Historie für das Profil. Leer = Hausverbrauch dieser Integration.",
+          "cmd_standard": "Ein Request pro Zeile, in dieser Reihenfolge. Standard: Netzladung stoppen und Akku-Aufteilung zurücksetzen (85 % Normalbetrieb, 5 % Puffer).",
+          "cmd_grid_charge": "{soc} = Ziel-Ladezustand der Netzladung, {current_soc} = aktueller Ladezustand.",
+          "cmd_hold": "Standard: Netzladung stoppen und Normalbetrieb auf {hold_active} verkleinern (= 100 − aktueller Ladezustand, mind. 10), damit die Notstrom-Reserve beim aktuellen Ladezustand beginnt. Wird beim PV-Laden nachgezogen. Ungetestet, siehe README."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_soc": {
+        "name": "Batterie Ladezustand"
+      },
+      "battery_power": {
+        "name": "Batterie Leistung"
+      },
+      "battery_charge_power": {
+        "name": "Batterie Ladeleistung"
+      },
+      "battery_discharge_power": {
+        "name": "Batterie Entladeleistung"
+      },
+      "battery_voltage": {
+        "name": "Batterie Spannung"
+      },
+      "battery_current": {
+        "name": "Batterie Strom"
+      },
+      "grid_power": {
+        "name": "Netz Leistung"
+      },
+      "grid_import_power": {
+        "name": "Netzbezug Leistung"
+      },
+      "grid_export_power": {
+        "name": "Netzeinspeisung Leistung"
+      },
+      "grid_power_l1": {
+        "name": "Netz Leistung L1"
+      },
+      "grid_power_l2": {
+        "name": "Netz Leistung L2"
+      },
+      "grid_power_l3": {
+        "name": "Netz Leistung L3"
+      },
+      "grid_voltage": {
+        "name": "Netz Spannung"
+      },
+      "grid_voltage_l1": {
+        "name": "Netz Spannung L1"
+      },
+      "grid_voltage_l2": {
+        "name": "Netz Spannung L2"
+      },
+      "grid_voltage_l3": {
+        "name": "Netz Spannung L3"
+      },
+      "grid_current_l1": {
+        "name": "Netz Strom L1"
+      },
+      "grid_current_l2": {
+        "name": "Netz Strom L2"
+      },
+      "grid_current_l3": {
+        "name": "Netz Strom L3"
+      },
+      "grid_frequency": {
+        "name": "Netz Frequenz"
+      },
+      "home_power": {
+        "name": "Hausverbrauch"
+      },
+      "solar_power": {
+        "name": "PV Leistung"
+      },
+      "solar1_power": {
+        "name": "PV String 1 Leistung"
+      },
+      "solar2_power": {
+        "name": "PV String 2 Leistung"
+      },
+      "solar1_voltage": {
+        "name": "PV String 1 Spannung"
+      },
+      "solar2_voltage": {
+        "name": "PV String 2 Spannung"
+      },
+      "solar1_current": {
+        "name": "PV String 1 Strom"
+      },
+      "solar2_current": {
+        "name": "PV String 2 Strom"
+      },
+      "inverter_power": {
+        "name": "Wechselrichter Leistung"
+      },
+      "inverter_voltage": {
+        "name": "Wechselrichter Spannung"
+      },
+      "inverter_current": {
+        "name": "Wechselrichter Strom"
+      },
+      "external_power": {
+        "name": "Externe Erzeugung Leistung"
+      },
+      "energy_grid_import": {
+        "name": "Netzbezug Energie"
+      },
+      "energy_grid_export": {
+        "name": "Netzeinspeisung Energie"
+      },
+      "energy_battery_charge": {
+        "name": "Batterie geladen Energie"
+      },
+      "energy_battery_discharge": {
+        "name": "Batterie entladen Energie"
+      },
+      "energy_solar": {
+        "name": "PV Energie"
+      },
+      "energy_external_production": {
+        "name": "Externe Erzeugung Energie"
+      },
+      "energy_home": {
+        "name": "Hausverbrauch Energie"
+      },
+      "battery_stored_energy": {
+        "name": "Batterie gespeicherte Energie"
+      },
+      "battery_empty_estimate": {
+        "name": "Batterie leer (Prognose, ohne PV)"
+      },
+      "forecast_next_hour": {
+        "name": "Verbrauchsprognose nächste Stunde"
+      },
+      "forecast_rest_of_today": {
+        "name": "Verbrauchsprognose Rest des Tages"
+      },
+      "forecast_next_24h": {
+        "name": "Verbrauchsprognose 24 h"
+      },
+      "forecast_tomorrow": {
+        "name": "Verbrauchsprognose morgen"
+      },
+      "last_backfill": {
+        "name": "Letzte Lückenfüllung"
+      }
+    },
+    "binary_sensor": {
+      "grid_charging_active": {
+        "name": "Netzladung aktiv"
+      },
+      "battery_schedule_active": {
+        "name": "Batterie-Zeitplan aktiv"
+      },
+      "eps_enabled": {
+        "name": "Notstrom aktiviert"
+      },
+      "eps_overload": {
+        "name": "Notstrom Überlast"
+      }
+    },
+    "select": {
+      "battery_mode": {
+        "name": "Batteriemodus",
+        "state": {
+          "standard": "Standard (Eigenverbrauch)",
+          "hold": "Energielevel halten",
+          "grid_charge": "Aus dem Netz laden"
+        }
+      }
+    },
+    "number": {
+      "grid_charge_target_soc": {
+        "name": "Netzladung Ziel-Ladezustand"
+      }
+    },
+    "button": {
+      "rebuild_profile": {
+        "name": "Verbrauchsprofil neu berechnen"
+      }
+    }
+  }
+}
