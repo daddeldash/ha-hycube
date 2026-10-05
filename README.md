@@ -129,8 +129,14 @@ Der Sensor **Verbrauchsprognose 24 h** hat zusätzlich diese Attribute:
 - `profile_today`: 24 Stundenwerte des heutigen Wochentags
 - `profile_days_of_data`, `profile_built`, `profile_source`
 
-**Batterie leer (Prognose, ohne PV)** rechnet den gespeicherten Inhalt gegen das Profil und gibt den
-Zeitpunkt zurück, an dem der Akku ohne PV-Ertrag leer wäre (bis 48 h voraus).
+**Batterie leer (Prognose, ohne PV)** rechnet den nutzbaren Inhalt gegen das Profil und gibt den
+Zeitpunkt zurück, an dem der Akku ohne PV-Ertrag nichts mehr ans Haus abgibt (bis 48 h voraus).
+Nutzbar ist nur der Teil oberhalb der Reserve-Grenze `100 − x_active` (Tiefentladeschutz, Puffer und
+Notstrom-Reserve), bei der Standard-Aufteilung also oberhalb von 15 %. Da die HyCube ihre Aufteilung nicht
+meldet, nimmt die Integration `x_active` aus dem Request des aktiven Modus. Im Modus *Energielevel
+halten* gilt die Grenze des Standard-Modus: Der Sensor zeigt dann, wie lange der gehaltene Inhalt nach
+der Freigabe reicht. Die Attribute `reserve_soc` (Grenze in %) und `usable_energy_kwh` zeigen die
+verwendeten Werte.
 
 Beispiel: Um 2 Uhr nachts aus dem Netz laden, wenn der Akku sonst vor 10 Uhr leer wäre (z. B. bei
 günstigem Nachttarif). Zurück auf *Standard* schaltet eine zweite Automation oder die HyCube selbst,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -23,6 +24,8 @@ from homeassistant.util import dt as dt_util
 
 from .api import HyCubeApi, HyCubeAuthError, HyCubeBusyError, HyCubeError
 from .const import (
+    BATTERY_ACTIVE_DEFAULT,
+    BATTERY_PROTECTION,
     BUSY_BACKOFF,
     CONF_CONTROL_ENABLED,
     CONF_PROFILE_SOURCE,
@@ -72,6 +75,8 @@ BACKFILL_RETRIES = 3
 BACKFILL_MAX_DAYS = 7
 # The controller may need a moment before /data_row/ reflects a new mode.
 MODE_READBACK_GRACE = 120.0
+# Normal-operation share in a /Bat/setCustomBat/ request.
+_SPLIT_ACTIVE = re.compile(r"setCustomBat/\S*[?&]x_active=(\d+)")
 
 type HyCubeConfigEntry = ConfigEntry[HyCubeCoordinator]
 
@@ -345,6 +350,23 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
     def hold_active_for(soc: int) -> int:
         """Normal-operation share that puts the reserve limit at `soc`."""
         return max(HOLD_MIN_ACTIVE, min(100, 100 - soc))
+
+    def discharge_floor(self) -> int:
+        """SoC below which the battery does not supply the home in normal use.
+
+        The device does not report its battery split, so the x_active of the
+        mode's command template is used. "Hold" raises the reserve only for the
+        time being; the forecast keeps the split of "standard" so it shows how
+        long the held energy lasts once released. Templates without a split
+        request leave it unchanged, so "standard" and then the default apply.
+        """
+        modes = [MODE_STANDARD] if self.mode == MODE_HOLD else [self.mode, MODE_STANDARD]
+        active = BATTERY_ACTIVE_DEFAULT
+        for mode in modes:
+            if match := _SPLIT_ACTIVE.search(self.command_for(mode)):
+                active = int(match.group(1))
+                break
+        return max(BATTERY_PROTECTION, min(100, 100 - active))
 
     def render_commands(self, mode: str) -> list[str]:
         """Requests for a mode with placeholders filled, one per line."""
