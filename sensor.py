@@ -257,21 +257,26 @@ class HyCubeStoredEnergySensor(HyCubeEntity, SensorEntity):
 
 
 class HyCubeBatteryEmptySensor(HyCubeEntity, SensorEntity):
-    """When the battery would be empty at profile consumption, without PV."""
+    """When the battery reaches its reserve at profile consumption, without PV."""
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
     def __init__(self, coordinator: HyCubeCoordinator) -> None:
         super().__init__(coordinator, "battery_empty_estimate")
 
+    def _usable(self) -> float | None:
+        """kWh above the reserve limit."""
+        if (soc := _soc(self.coordinator)) is None:
+            return None
+        floor = self.coordinator.discharge_floor()
+        return max(soc - floor, 0.0) / 100 * _capacity(self.coordinator)
+
     @property
     def native_value(self) -> datetime | None:
         profile = self.coordinator.profile
-        if (soc := _soc(self.coordinator)) is None or not profile.ready:
+        if (remaining := self._usable()) is None or not profile.ready:
             return None
-        remaining = soc / 100 * _capacity(self.coordinator)
-        now = dt_util.now()
-        cursor = now
+        cursor = dt_util.now()
         for _ in range(48):
             hour_end = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
             need = profile.forecast(cursor, hour_end) or 0.0
@@ -282,6 +287,14 @@ class HyCubeBatteryEmptySensor(HyCubeEntity, SensorEntity):
             remaining -= need
             cursor = hour_end
         return None  # lasts more than 48 h
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        usable = self._usable()
+        return {
+            "reserve_soc": self.coordinator.discharge_floor(),
+            "usable_energy_kwh": None if usable is None else round(usable, 2),
+        }
 
 
 def _next_hour(c: HyCubeCoordinator, now: datetime) -> float | None:

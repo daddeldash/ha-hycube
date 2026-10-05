@@ -37,7 +37,11 @@ DEFAULT_PROFILE_WEEKS: Final = 8
 # There is no "block discharge" request. "Hold" shrinks normal operation so the
 # reserve starts at the current SoC (x_active = 100 - SoC, at least 10).
 # Placeholders: {soc} grid-charge target, {current_soc}, {hold_active}.
-BATTERY_SPLIT_DEFAULT: Final = "/Bat/setCustomBat/?x_active=85&x_passive=5"
+BATTERY_PROTECTION: Final = 5  # % deep-discharge protection, never usable
+BATTERY_ACTIVE_DEFAULT: Final = 85  # % normal operation of the default split
+BATTERY_SPLIT_DEFAULT: Final = (
+    f"/Bat/setCustomBat/?x_active={BATTERY_ACTIVE_DEFAULT}&x_passive=5"
+)
 CHARGE_STOP: Final = "/smartCharging/ManualChargingActivation/?value="
 DEFAULT_CMD_STANDARD: Final = f"{CHARGE_STOP}\n{BATTERY_SPLIT_DEFAULT}"
 DEFAULT_CMD_HOLD: Final = (
