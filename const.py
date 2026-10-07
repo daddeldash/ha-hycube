@@ -61,6 +61,16 @@ HOLD_RESEND_MIN_INTERVAL: Final = 900  # s between two hold updates
 # means the controller refills the reserve from the grid.
 HOLD_GRID_CHARGE_WARN: Final = 100  # W
 HOLD_PV_IDLE: Final = 50  # W
+# After leaving "hold" the battery should supply the home again. Grid import
+# above this while the battery idles above its reserve is reported once.
+HOLD_RELEASE_GRID_MIN: Final = 50  # W
+HOLD_RELEASE_WATCH: Final = 3600  # s after leaving hold that are watched
+HOLD_RELEASE_WARN_AFTER: Final = 600  # s of idling before the warning
+
+# --- Capacity estimate --------------------------------------------------------
+CAPACITY_MIN_DROP: Final = 20  # % SoC drop per sample
+CAPACITY_MAX_CHARGE_WH: Final = 20  # charging that invalidates a stretch
+CAPACITY_WEIGHT: Final = 0.3  # weight of a new sample in the running mean
 
 # --- Polling behaviour --------------------------------------------------------
 MAX_BACKOFF: Final = timedelta(minutes=5)

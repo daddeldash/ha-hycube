@@ -16,6 +16,9 @@ from datetime import date, datetime, time, timedelta, tzinfo
 from typing import Any
 
 from .const import (
+    CAPACITY_MAX_CHARGE_WH,
+    CAPACITY_MIN_DROP,
+    CAPACITY_WEIGHT,
     ENERGY_BATTERY_CHARGE,
     ENERGY_BATTERY_DISCHARGE,
     ENERGY_EXTERNAL,
@@ -200,3 +203,51 @@ class EnergyAccumulator:
                     self.integrate(self.last, sample)
             self.last = sample
         return skipped
+
+
+class CapacityEstimator:
+    """Energy the battery delivers per 100 % SoC, learned from discharges.
+
+    Between two SoC steps the discharge counter is compared with the SoC
+    drop. Both ends sit on a step edge, so the integer SoC adds no rounding
+    error. A stretch with charging in between is discarded.
+    """
+
+    def __init__(self, data: Mapping[str, Any] | None = None) -> None:
+        data = data or {}
+        self.kwh: float | None = data.get("kwh")
+        self.samples: int = int(data.get("samples", 0))
+        self.last_sample: float | None = data.get("last_sample")
+        self._prev_soc: float | None = None
+        # (soc, discharge Wh, charge Wh) at the last usable step edge
+        self._anchor: tuple[float, float, float] | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"kwh": self.kwh, "samples": self.samples, "last_sample": self.last_sample}
+
+    def update(self, soc: float, discharge_wh: float, charge_wh: float) -> bool:
+        """Feed one sample; True when a new estimate was taken."""
+        prev, self._prev_soc = self._prev_soc, soc
+        if prev is None or soc == prev:
+            return False
+        anchor = self._anchor
+        if (
+            anchor is None
+            or soc > anchor[0]
+            or charge_wh - anchor[2] > CAPACITY_MAX_CHARGE_WH
+        ):
+            self._anchor = (soc, discharge_wh, charge_wh)
+            return False
+        drop = anchor[0] - soc
+        if drop < CAPACITY_MIN_DROP:
+            return False
+        sample = (discharge_wh - anchor[1]) / drop * 100 / 1000
+        self._anchor = (soc, discharge_wh, charge_wh)
+        if sample <= 0:
+            return False
+        self.last_sample = round(sample, 2)
+        if self.kwh is not None:
+            sample = self.kwh * (1 - CAPACITY_WEIGHT) + sample * CAPACITY_WEIGHT
+        self.kwh = round(sample, 2)
+        self.samples += 1
+        return True

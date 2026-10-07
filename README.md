@@ -70,7 +70,7 @@ Erreichbar über **Geräte & Dienste → HyCube → Konfigurieren**.
 | --- | --- | --- |
 | Abfrageintervall Echtzeitwerte | 10 s | Wie oft `/get_values/` abgefragt wird (min. 5 s). Kürzere Intervalle machen die Energiezähler genauer, belasten aber den Controller. |
 | Abfrageintervall Status | 60 s | Wie oft die Statusflags (`/data_row/`) gelesen werden. |
-| Nutzbare Batteriekapazität | 10 kWh | Für „gespeicherte Energie“ und die Prognose „Batterie leer“. Trage den Wert deines Speichers ein. |
+| Nutzbare Batteriekapazität | 10 kWh | Energie pro 100 % Ladezustand, für „gespeicherte Energie“ und die Prognose „Batterie leer“. Die Diagnose-Entität **Batteriekapazität (geschätzt)** zeigt, was der Akku beim Entladen tatsächlich liefert (erster Wert nach mindestens 20 % Entladung ohne Laden, z. B. abends); trage diesen Wert hier ein. |
 | Wochen Historie für das Profil | 8 | Zeitraum, aus dem das Verbrauchsprofil gebaut wird. |
 | Profil-Quelle | leer | Optional ein beliebiger Energie-Sensor mit Langzeitstatistik. Leer = Tagesstatistik der HyCube (Fallback: Hausverbrauch-Zähler dieser Integration). |
 | Batteriesteuerung aktivieren | an | Ist sie aus, lehnt die Integration jede Modusänderung ab und liest nur noch. |
@@ -97,8 +97,11 @@ konfigurierten HyCube (beginnend mit `/`), keine fremden Hosts.
 
 > ⚠️ **„Energielevel halten“ ist experimentell.** Die HyCube hat keinen Befehl „Entladen sperren“, der
 > Modus arbeitet deshalb mit der Notstrom-Reserve. Manche Firmware füllt diese Reserve aus dem Netz auf.
-> Erkennt die Integration Batterieladung ohne PV, schreibt sie eine Warnung ins Log. Beobachte das
-> Verhalten deines Geräts, bevor du den Modus in Automationen nutzt.
+> Erkennt die Integration Batterieladung ohne PV, schreibt sie eine Warnung ins Log. Beobachtet wurde
+> außerdem, dass der Akku nach dem Verlassen von „Halten“ bis zu anderthalb Stunden nicht entlädt. Bezieht
+> das Haus in der Stunde danach länger als 10 Minuten Strom aus dem Netz, obwohl der Akku über der Reserve
+> steht, schreibt die Integration ebenfalls eine Warnung ins Log. Beobachte das Verhalten deines Geräts,
+> bevor du den Modus in Automationen nutzt.
 
 Ändert jemand die Netzladung direkt in der HyWeb-Oberfläche oder ist sie abgeschlossen, übernimmt die
 Auswahl den Zustand beim nächsten Statusabruf.
@@ -177,8 +180,8 @@ Externe Erzeugung*, Hausverbrauch · Batterie gespeicherte Energie
 **Sensoren (Prognose)**: Batterie leer (ohne PV), Verbrauchsprognose nächste Stunde / Rest des Tages /
 24 h / morgen
 
-**Diagnose**: Letzte Lückenfüllung (mit Lückenlänge, nachgetragener Energie und nicht rekonstruierbarer
-Zeit als Attribute)
+**Diagnose**: Batteriekapazität (geschätzt) · Letzte Lückenfüllung (mit Lückenlänge, nachgetragener
+Energie und nicht rekonstruierbarer Zeit als Attribute)
 
 **Binärsensoren**: Netzladung aktiv, Batterie-Zeitplan aktiv, Notstrom aktiviert, Notstrom Überlast
 
