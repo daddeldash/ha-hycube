@@ -172,6 +172,7 @@ async def async_setup_entry(
     entities += [HyCubeEnergySensor(coordinator, key) for key in ENERGY_SENSORS]
     entities += [
         HyCubeStoredEnergySensor(coordinator),
+        HyCubeCapacityEstimateSensor(coordinator),
         HyCubeBatteryEmptySensor(coordinator),
         HyCubeForecastSensor(coordinator, "forecast_next_hour", _next_hour),
         HyCubeForecastSensor(coordinator, "forecast_rest_of_today", _rest_of_today),
@@ -254,6 +255,35 @@ class HyCubeStoredEnergySensor(HyCubeEntity, SensorEntity):
         if (soc := _soc(self.coordinator)) is None:
             return None
         return round(soc / 100 * _capacity(self.coordinator), 3)
+
+
+class HyCubeCapacityEstimateSensor(HyCubeEntity, SensorEntity):
+    """Diagnostics: energy the battery delivered per 100 % SoC while discharging."""
+
+    _attr_device_class = SensorDeviceClass.ENERGY_STORAGE
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_suggested_display_precision = 1
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: HyCubeCoordinator) -> None:
+        super().__init__(coordinator, "battery_capacity_estimate")
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.capacity.kwh
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        est = self.coordinator.capacity
+        return {
+            "samples": est.samples,
+            "last_sample_kwh": est.last_sample,
+            "configured_kwh": _capacity(self.coordinator),
+        }
 
 
 class HyCubeBatteryEmptySensor(HyCubeEntity, SensorEntity):

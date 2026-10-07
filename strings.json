@@ -184,6 +184,9 @@
       "battery_stored_energy": {
         "name": "Battery stored energy"
       },
+      "battery_capacity_estimate": {
+        "name": "Battery capacity (estimated)"
+      },
       "battery_empty_estimate": {
         "name": "Battery empty (forecast, without PV)"
       },

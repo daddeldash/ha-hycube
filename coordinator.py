@@ -37,6 +37,8 @@ from .const import (
     DEFAULT_STATUS_INTERVAL,
     DEFAULT_TARGET_SOC,
     DOMAIN,
+    ENERGY_BATTERY_CHARGE,
+    ENERGY_BATTERY_DISCHARGE,
     ENERGY_HOME,
     GAP_BACKFILL_FACTOR,
     GAP_MAX_INTERPOLATE,
@@ -45,6 +47,9 @@ from .const import (
     HOLD_GRID_CHARGE_WARN,
     HOLD_MIN_ACTIVE,
     HOLD_PV_IDLE,
+    HOLD_RELEASE_GRID_MIN,
+    HOLD_RELEASE_WARN_AFTER,
+    HOLD_RELEASE_WATCH,
     HOLD_RESEND_MIN_INTERVAL,
     HOLD_RESEND_STEP,
     MAX_BACKOFF,
@@ -59,6 +64,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .energy import (
+    CapacityEstimator,
     EnergyAccumulator,
     buckets_from_day_stats,
     hourly_kwh,
@@ -117,6 +123,7 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         self.mode: str = MODE_STANDARD
         self.target_soc: int = DEFAULT_TARGET_SOC
         self.last_backfill: dict[str, Any] = {}
+        self.capacity = CapacityEstimator()
         # Hourly household kWh per past day from the device's own statistics.
         self.history: dict[str, list[float | None] | None] = {}
         self._status_interval = entry.options.get(
@@ -132,6 +139,9 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         # update returns, so calculations during an update must not use it.
         self._latest_values: dict[str, Any] = {}
         self._hold_grid_polls = 0
+        # Leaving "hold": watch until this time whether the battery resumes.
+        self._release_until = 0.0
+        self._release_idle_since: float | None = None
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
         )
@@ -149,6 +159,8 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         self.hold_active = stored.get("hold_active")
         self.profile = ConsumptionProfile.from_dict(stored.get("profile"))
         self.history = stored.get("history") or {}
+        self.last_backfill = stored.get("last_backfill") or {}
+        self.capacity = CapacityEstimator(stored.get("capacity"))
         try:
             self.info = await self.api.get_info()
         except HyCubeAuthError as err:
@@ -187,6 +199,8 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
             "hold_active": self.hold_active,
             "profile": self.profile.as_dict(),
             "history": self.history,
+            "last_backfill": self.last_backfill,
+            "capacity": self.capacity.as_dict(),
         }
 
     @callback
@@ -220,6 +234,13 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
 
         if self.mode == MODE_HOLD:
             self._check_hold(values)
+        elif self.mode == MODE_STANDARD and now < self._release_until:
+            self._check_release(values, now)
+        if (soc := to_float(values.get("Battery_C"))) is not None:
+            totals = self.energy.totals
+            self.capacity.update(
+                soc, totals[ENERGY_BATTERY_DISCHARGE], totals[ENERGY_BATTERY_CHARGE]
+            )
 
         if self._failures:
             _LOGGER.info("HyCube reachable again after %s failed polls", self._failures)
@@ -417,6 +438,35 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
                 self.hass, self._resend_hold(), f"{DOMAIN}_hold_update"
             )
 
+    def _check_release(self, values: dict[str, Any], now: float) -> None:
+        """Warn once if the battery keeps idling after "hold" was left."""
+        battery = to_float(values.get("Battery_P")) or 0.0
+        grid = to_float(values.get("Grid_P")) or 0.0
+        soc = to_float(values.get("Battery_C"))
+        if (
+            battery < -HOLD_RELEASE_GRID_MIN
+            or soc is None
+            or soc <= self.discharge_floor() + 2
+        ):
+            # Discharging again, or nothing left to give: nothing to report.
+            self._release_until = 0.0
+            return
+        if grid < HOLD_RELEASE_GRID_MIN:
+            self._release_idle_since = None
+            return
+        if self._release_idle_since is None:
+            self._release_idle_since = now
+        elif now - self._release_idle_since >= HOLD_RELEASE_WARN_AFTER:
+            _LOGGER.warning(
+                "HyCube does not discharge %.0f min after leaving 'hold': SoC %.0f%% is "
+                "above the reserve (%s%%) but the home draws %.0f W from the grid",
+                (now - self._release_idle_since) / 60,
+                soc,
+                self.discharge_floor(),
+                grid,
+            )
+            self._release_until = 0.0
+
     async def _resend_hold(self) -> None:
         try:
             await self.async_set_mode(MODE_HOLD)
@@ -450,6 +500,9 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
                 raise HomeAssistantError(
                     f"HyCube command {command} failed: {err}"
                 ) from err
+        if self.mode == MODE_HOLD and mode != MODE_HOLD:
+            self._release_until = time.time() + HOLD_RELEASE_WATCH
+            self._release_idle_since = None
         if mode == MODE_HOLD and (soc := self._current_soc()) is not None:
             self.hold_active = self.hold_active_for(soc)
         elif mode != MODE_HOLD:

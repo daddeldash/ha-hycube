@@ -27,6 +27,8 @@ async def async_get_config_entry_diagnostics(
         "energy_totals_wh": c.energy.totals,
         "last_sample": c.energy.last,
         "last_backfill": c.last_backfill,
+        "capacity_estimate": c.capacity.as_dict(),
+        "discharge_floor": c.discharge_floor(),
         "history_days": len([v for v in c.history.values() if v]),
         "mode": c.mode,
         "target_soc": c.target_soc,
