@@ -27,16 +27,19 @@ from .const import (
     BATTERY_ACTIVE_DEFAULT,
     BATTERY_PROTECTION,
     BUSY_BACKOFF,
+    CONF_BATTERY_CAPACITY,
     CONF_CONTROL_ENABLED,
     CONF_PROFILE_SOURCE,
     CONF_PROFILE_WEEKS,
     CONF_SCAN_INTERVAL,
     CONF_STATUS_INTERVAL,
+    DEFAULT_BATTERY_CAPACITY,
     DEFAULT_PROFILE_WEEKS,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_STATUS_INTERVAL,
     DEFAULT_TARGET_SOC,
     DOMAIN,
+    EFFICIENCY_MIN_SAMPLES,
     ENERGY_BATTERY_CHARGE,
     ENERGY_BATTERY_DISCHARGE,
     ENERGY_HOME,
@@ -48,6 +51,7 @@ from .const import (
     HOLD_MIN_ACTIVE,
     HOLD_PV_IDLE,
     HOLD_RELEASE_GRID_MIN,
+    HOLD_RELEASE_IDLE,
     HOLD_RELEASE_WARN_AFTER,
     HOLD_RELEASE_WATCH,
     HOLD_RESEND_MIN_INTERVAL,
@@ -69,8 +73,10 @@ from .energy import (
     buckets_from_day_stats,
     hourly_kwh,
     powers_from_values,
+    round_trip_efficiency,
     to_float,
 )
+from .planner import HyCubePlanner
 from .profile import ConsumptionProfile
 
 _LOGGER = logging.getLogger(__name__)
@@ -124,6 +130,9 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         self.target_soc: int = DEFAULT_TARGET_SOC
         self.last_backfill: dict[str, Any] = {}
         self.capacity = CapacityEstimator()
+        # Energy the battery takes per 100 % SoC; with `capacity` the efficiency.
+        self.charge_capacity = CapacityEstimator(rising=True)
+        self.planner = HyCubePlanner(hass, self)
         # Hourly household kWh per past day from the device's own statistics.
         self.history: dict[str, list[float | None] | None] = {}
         self._status_interval = entry.options.get(
@@ -142,6 +151,8 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         # Leaving "hold": watch until this time whether the battery resumes.
         self._release_until = 0.0
         self._release_idle_since: float | None = None
+        # When "hold" was left, until the battery is seen discharging again.
+        self._hold_left_at: float | None = None
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
         )
@@ -161,6 +172,10 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         self.history = stored.get("history") or {}
         self.last_backfill = stored.get("last_backfill") or {}
         self.capacity = CapacityEstimator(stored.get("capacity"))
+        self.charge_capacity = CapacityEstimator(
+            stored.get("charge_capacity"), rising=True
+        )
+        self.planner.restore(stored.get("planner"))
         try:
             self.info = await self.api.get_info()
         except HyCubeAuthError as err:
@@ -170,7 +185,8 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
 
     @callback
     def start_profile_schedule(self) -> None:
-        """Rebuild the profile daily and shortly after start."""
+        """Rebuild the profile daily and shortly after start; start planning."""
+        self.planner.start()
         self.config_entry.async_on_unload(
             async_track_time_change(
                 self.hass, self._scheduled_profile_rebuild, hour=0, minute=10, second=0
@@ -201,11 +217,18 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
             "history": self.history,
             "last_backfill": self.last_backfill,
             "capacity": self.capacity.as_dict(),
+            "charge_capacity": self.charge_capacity.as_dict(),
+            "planner": self.planner.as_dict(),
         }
 
     @callback
     def _schedule_save(self) -> None:
         self._store.async_delay_save(self._store_data, STORAGE_SAVE_DELAY)
+
+    @callback
+    def async_schedule_save(self) -> None:
+        """Persist the stored state soon (for the planner and entities)."""
+        self._schedule_save()
 
     # --- polling ----------------------------------------------------------------
     async def _async_update_data(self) -> HyCubeData:
@@ -222,25 +245,40 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
                 self.energy.add_series(
                     [(now, live)], max_gap=GAP_MAX_INTERPOLATE.total_seconds()
                 )
-            status = self.data.status if self.data else {}
-            if now - self._last_status >= self._status_interval:
-                status = await self.api.get_data_row()
-                self._last_status = now
-                self._sync_mode_from_status(status)
         except HyCubeAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except HyCubeError as err:
             return self._handle_failure(err)
 
+        status = self.data.status if self.data else {}
+        if now - self._last_status >= self._status_interval:
+            try:
+                status = await self.api.get_data_row()
+            except HyCubeAuthError as err:
+                raise ConfigEntryAuthFailed(str(err)) from err
+            except HyCubeError as err:
+                # The values above are fresh; the flags are retried in 30 s.
+                _LOGGER.debug("HyCube status flags not read: %s", err)
+                self._last_status = now - max(self._status_interval - 30, 0)
+            else:
+                self._last_status = now
+                self._sync_mode_from_status(status)
+
         if self.mode == MODE_HOLD:
             self._check_hold(values)
         elif self.mode == MODE_STANDARD and now < self._release_until:
             self._check_release(values, now)
+        if self._hold_left_at is not None and (
+            (to_float(values.get("Battery_P")) or 0.0) < -HOLD_RELEASE_GRID_MIN
+            or now - self._hold_left_at >= HOLD_RELEASE_IDLE
+        ):
+            self._hold_left_at = None  # discharging again, or waited long enough
         if (soc := to_float(values.get("Battery_C"))) is not None:
             totals = self.energy.totals
-            self.capacity.update(
-                soc, totals[ENERGY_BATTERY_DISCHARGE], totals[ENERGY_BATTERY_CHARGE]
-            )
+            discharged = totals[ENERGY_BATTERY_DISCHARGE]
+            charged = totals[ENERGY_BATTERY_CHARGE]
+            self.capacity.update(soc, discharged, charged)
+            self.charge_capacity.update(soc, charged, discharged)
 
         if self._failures:
             _LOGGER.info("HyCube reachable again after %s failed polls", self._failures)
@@ -362,6 +400,32 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
             # Finished or switched off on the device itself.
             self.mode = MODE_STANDARD
 
+    # --- battery model --------------------------------------------------------------
+    @property
+    def soc(self) -> float | None:
+        """State of charge of the newest sample, %."""
+        return to_float(self._latest_values.get("Battery_C"))
+
+    def usable_capacity(self) -> float:
+        """kWh per 100 % SoC: measured once there are samples, else configured."""
+        if self.capacity.kwh and self.capacity.samples >= EFFICIENCY_MIN_SAMPLES:
+            return self.capacity.kwh
+        return float(
+            self.config_entry.options.get(CONF_BATTERY_CAPACITY, DEFAULT_BATTERY_CAPACITY)
+        )
+
+    def release_idle_seconds(self) -> float:
+        """How long the battery may still not discharge after "hold" was left."""
+        if self._hold_left_at is None:
+            return 0.0
+        return max(self._hold_left_at + HOLD_RELEASE_IDLE - time.time(), 0.0)
+
+    def efficiency(self) -> float | None:
+        """Measured share of the charged energy the battery gives back."""
+        return round_trip_efficiency(
+            self.capacity, self.charge_capacity, EFFICIENCY_MIN_SAMPLES
+        )
+
     # --- control ------------------------------------------------------------------
     def _current_soc(self) -> int | None:
         soc = to_float(self._latest_values.get("Battery_C"))
@@ -422,6 +486,7 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
                     "'hold' - the controller seems to refill the reserve from the grid",
                     battery,
                 )
+                self.planner.block_hold()
         else:
             self._hold_grid_polls = 0
 
@@ -503,6 +568,9 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         if self.mode == MODE_HOLD and mode != MODE_HOLD:
             self._release_until = time.time() + HOLD_RELEASE_WATCH
             self._release_idle_since = None
+            self._hold_left_at = time.time()
+        elif mode == MODE_HOLD:
+            self._hold_left_at = None
         if mode == MODE_HOLD and (soc := self._current_soc()) is not None:
             self.hold_active = self.hold_active_for(soc)
         elif mode != MODE_HOLD:
@@ -622,3 +690,4 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         _LOGGER.debug("HyCube profile rebuilt from %s (%s hours)", source, len(rows))
         self._schedule_save()
         self.async_update_listeners()
+        self.planner.schedule_update()

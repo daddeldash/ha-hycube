@@ -18,6 +18,7 @@ from typing import Any
 from .const import (
     CAPACITY_MAX_CHARGE_WH,
     CAPACITY_MIN_DROP,
+    CAPACITY_MIN_RISE,
     CAPACITY_WEIGHT,
     ENERGY_BATTERY_CHARGE,
     ENERGY_BATTERY_DISCHARGE,
@@ -206,43 +207,53 @@ class EnergyAccumulator:
 
 
 class CapacityEstimator:
-    """Energy the battery delivers per 100 % SoC, learned from discharges.
+    """Energy per 100 % SoC, learned from stretches where the SoC moves one way.
 
-    Between two SoC steps the discharge counter is compared with the SoC
-    drop. Both ends sit on a step edge, so the integer SoC adds no rounding
-    error. A stretch with charging in between is discarded.
+    Falling (default): what the battery delivers while discharging. Rising:
+    what it takes while charging. The energy counter is compared with the SoC
+    change between two step edges in the measured direction, so the integer
+    SoC adds no rounding error and idle time before the stretch (standby
+    trickle charge) is not counted. A step the other way, or noticeable flow
+    the other way, discards the stretch.
     """
 
-    def __init__(self, data: Mapping[str, Any] | None = None) -> None:
+    def __init__(
+        self, data: Mapping[str, Any] | None = None, *, rising: bool = False
+    ) -> None:
         data = data or {}
         self.kwh: float | None = data.get("kwh")
         self.samples: int = int(data.get("samples", 0))
         self.last_sample: float | None = data.get("last_sample")
+        self._rising = rising
+        self._min_step = CAPACITY_MIN_RISE if rising else CAPACITY_MIN_DROP
         self._prev_soc: float | None = None
-        # (soc, discharge Wh, charge Wh) at the last usable step edge
+        # (soc, measured Wh, opposite Wh) at the last usable step edge
         self._anchor: tuple[float, float, float] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {"kwh": self.kwh, "samples": self.samples, "last_sample": self.last_sample}
 
-    def update(self, soc: float, discharge_wh: float, charge_wh: float) -> bool:
-        """Feed one sample; True when a new estimate was taken."""
+    def update(self, soc: float, flow_wh: float, opposite_wh: float) -> bool:
+        """Feed one sample; True when a new estimate was taken.
+
+        flow_wh is the counter of the measured direction (discharge when
+        falling, charge when rising), opposite_wh the other one.
+        """
         prev, self._prev_soc = self._prev_soc, soc
         if prev is None or soc == prev:
             return False
+        if (soc > prev) != self._rising:
+            self._anchor = None
+            return False
         anchor = self._anchor
-        if (
-            anchor is None
-            or soc > anchor[0]
-            or charge_wh - anchor[2] > CAPACITY_MAX_CHARGE_WH
-        ):
-            self._anchor = (soc, discharge_wh, charge_wh)
+        if anchor is None or opposite_wh - anchor[2] > CAPACITY_MAX_CHARGE_WH:
+            self._anchor = (soc, flow_wh, opposite_wh)
             return False
-        drop = anchor[0] - soc
-        if drop < CAPACITY_MIN_DROP:
+        step = abs(soc - anchor[0])
+        if step < self._min_step:
             return False
-        sample = (discharge_wh - anchor[1]) / drop * 100 / 1000
-        self._anchor = (soc, discharge_wh, charge_wh)
+        sample = (flow_wh - anchor[1]) / step * 100 / 1000
+        self._anchor = (soc, flow_wh, opposite_wh)
         if sample <= 0:
             return False
         self.last_sample = round(sample, 2)
@@ -251,3 +262,20 @@ class CapacityEstimator:
         self.kwh = round(sample, 2)
         self.samples += 1
         return True
+
+
+def round_trip_efficiency(
+    delivered: CapacityEstimator, taken: CapacityEstimator, min_samples: int
+) -> float | None:
+    """Share of the charged energy the battery gives back, if measured.
+
+    Both estimators refer to 100 % SoC, so their ratio is the efficiency.
+    """
+    if (
+        not delivered.kwh
+        or not taken.kwh
+        or delivered.samples < min_samples
+        or taken.samples < min_samples
+    ):
+        return None
+    return round(min(1.0, max(0.5, delivered.kwh / taken.kwh)), 3)

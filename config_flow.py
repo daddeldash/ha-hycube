@@ -20,21 +20,60 @@ from .const import (
     CONF_CMD_HOLD,
     CONF_CMD_STANDARD,
     CONF_CONTROL_ENABLED,
+    CONF_EFFICIENCY,
+    CONF_EXPORT_PRICE,
+    CONF_GRID_CHARGE_POWER,
+    CONF_MAX_CHARGE_SOC,
+    CONF_PLAN_GRID_CHARGE,
+    CONF_PLAN_HOLD,
     CONF_PROFILE_SOURCE,
     CONF_PROFILE_WEEKS,
+    CONF_PV_FACTOR,
     CONF_SCAN_INTERVAL,
+    CONF_SHIFT_COST,
     CONF_STATUS_INTERVAL,
+    CONF_TIBBER_HOME,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_CMD_GRID_CHARGE,
     DEFAULT_CMD_HOLD,
     DEFAULT_CMD_STANDARD,
+    DEFAULT_EXPORT_PRICE,
+    DEFAULT_GRID_CHARGE_POWER,
+    DEFAULT_MAX_CHARGE_SOC,
     DEFAULT_PASSWORD,
     DEFAULT_PROFILE_WEEKS,
+    DEFAULT_PV_FACTOR,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SHIFT_COST,
     DEFAULT_STATUS_INTERVAL,
     DEFAULT_USERNAME,
     DOMAIN,
     MIN_SCAN_INTERVAL,
+)
+from .planner import async_tibber_prices
+
+# Options of the two steps; saving one step keeps the other one's values.
+DEVICE_OPTIONS = (
+    CONF_SCAN_INTERVAL,
+    CONF_STATUS_INTERVAL,
+    CONF_BATTERY_CAPACITY,
+    CONF_PROFILE_WEEKS,
+    CONF_PROFILE_SOURCE,
+    CONF_CONTROL_ENABLED,
+    CONF_CMD_STANDARD,
+    CONF_CMD_HOLD,
+    CONF_CMD_GRID_CHARGE,
+)
+SCHEDULE_OPTIONS = (
+    CONF_TIBBER_HOME,
+    CONF_PLAN_GRID_CHARGE,
+    CONF_PLAN_HOLD,
+    CONF_GRID_CHARGE_POWER,
+    CONF_MAX_CHARGE_SOC,
+    CONF_EFFICIENCY,
+    CONF_SHIFT_COST,
+    CONF_EXPORT_PRICE,
+    CONF_PV_FACTOR,
 )
 
 
@@ -153,17 +192,91 @@ def _seconds(minimum: int, maximum: int) -> selector.NumberSelector:
     )
 
 
+def _number(
+    minimum: float, maximum: float, step: float, unit: str | None = None
+) -> selector.NumberSelector:
+    config = selector.NumberSelectorConfig(
+        min=minimum, max=maximum, step=step, mode=selector.NumberSelectorMode.BOX
+    )
+    if unit:
+        config["unit_of_measurement"] = unit
+    return selector.NumberSelector(config)
+
+
 _MULTILINE = selector.TextSelector(selector.TextSelectorConfig(multiline=True))
 
 
 class HyCubeOptionsFlow(OptionsFlow):
-    """Polling, battery, profile and control settings."""
+    """Device settings (polling, battery, profile, control) and the schedule."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return self.async_show_menu(step_id="init", menu_options=["device", "schedule"])
+
+    def _save(self, user_input: dict[str, Any], keys: tuple[str, ...]) -> ConfigFlowResult:
+        """Replace the options of one step; a field left empty is removed."""
+        options = {k: v for k, v in self.config_entry.options.items() if k not in keys}
+        options.update(user_input)
+        return self.async_create_entry(data=options)
+
+    async def async_step_schedule(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            for key in (CONF_GRID_CHARGE_POWER, CONF_MAX_CHARGE_SOC):
+                user_input[key] = int(user_input[key])
+            return self._save(user_input, SCHEDULE_OPTIONS)
+
+        opts = self.config_entry.options
+        try:
+            homes = sorted(await async_tibber_prices(self.hass))
+        except Exception:  # noqa: BLE001 - Tibber missing or not reachable
+            homes = []
+        home: selector.Selector = selector.TextSelector()
+        if homes:
+            home = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=homes, custom_value=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_TIBBER_HOME): home,
+                vol.Required(
+                    CONF_PLAN_GRID_CHARGE, default=opts.get(CONF_PLAN_GRID_CHARGE, True)
+                ): selector.BooleanSelector(),
+                vol.Required(
+                    CONF_PLAN_HOLD, default=opts.get(CONF_PLAN_HOLD, True)
+                ): selector.BooleanSelector(),
+                vol.Required(
+                    CONF_GRID_CHARGE_POWER,
+                    default=opts.get(CONF_GRID_CHARGE_POWER, DEFAULT_GRID_CHARGE_POWER),
+                ): _number(500, 10000, 100, "W"),
+                vol.Required(
+                    CONF_MAX_CHARGE_SOC,
+                    default=opts.get(CONF_MAX_CHARGE_SOC, DEFAULT_MAX_CHARGE_SOC),
+                ): _number(20, 100, 5, "%"),
+                vol.Optional(CONF_EFFICIENCY): _number(50, 100, 1, "%"),
+                vol.Required(
+                    CONF_SHIFT_COST, default=opts.get(CONF_SHIFT_COST, DEFAULT_SHIFT_COST)
+                ): _number(0, 20, 0.1, "ct/kWh"),
+                vol.Required(
+                    CONF_EXPORT_PRICE,
+                    default=opts.get(CONF_EXPORT_PRICE, DEFAULT_EXPORT_PRICE),
+                ): _number(0, 50, 0.1, "ct/kWh"),
+                vol.Required(
+                    CONF_PV_FACTOR, default=opts.get(CONF_PV_FACTOR, DEFAULT_PV_FACTOR)
+                ): _number(0.3, 1.5, 0.05),
+            }
+        )
+        return self.async_show_form(
+            step_id="schedule",
+            data_schema=self.add_suggested_values_to_schema(schema, opts),
+        )
+
+    async def async_step_device(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             for key in (CONF_SCAN_INTERVAL, CONF_STATUS_INTERVAL, CONF_PROFILE_WEEKS):
                 user_input[key] = int(user_input[key])
-            return self.async_create_entry(data=user_input)
+            return self._save(user_input, DEVICE_OPTIONS)
 
         opts = self.config_entry.options
         schema = vol.Schema(
@@ -201,7 +314,7 @@ class HyCubeOptionsFlow(OptionsFlow):
             }
         )
         return self.async_show_form(
-            step_id="init",
+            step_id="device",
             data_schema=self.add_suggested_values_to_schema(
                 schema,
                 {

@@ -1,4 +1,4 @@
-"""Sensors for HyCube: live values, energy counters, profile forecast."""
+"""Sensors for HyCube: live values, energy counters, forecast, schedule."""
 
 from __future__ import annotations
 
@@ -36,6 +36,9 @@ from .const import (
     ENERGY_GRID_IMPORT,
     ENERGY_HOME,
     ENERGY_SOLAR,
+    MODE_GRID_CHARGE,
+    MODES,
+    SOURCES,
 )
 from .coordinator import HyCubeConfigEntry, HyCubeCoordinator
 from .energy import to_float
@@ -179,6 +182,11 @@ async def async_setup_entry(
         HyCubeForecastSensor(coordinator, "forecast_next_24h", _next_24h),
         HyCubeForecastSensor(coordinator, "forecast_tomorrow", _tomorrow),
         HyCubeBackfillSensor(coordinator),
+        HyCubePlanSourceSensor(coordinator),
+        HyCubePlanModeSensor(coordinator),
+        HyCubeNextGridChargeSensor(coordinator),
+        HyCubePlanSavingsSensor(coordinator),
+        HyCubeEfficiencySensor(coordinator),
     ]
     async_add_entities(entities)
 
@@ -199,7 +207,10 @@ class HyCubeValueSensor(HyCubeEntity, SensorEntity):
             if (val := to_float(values.get(key))) is not None:
                 if self.entity_description.transform:
                     val = self.entity_description.transform(val)
-                return val
+                # The device sends 32-bit floats (526.000022888184); without
+                # rounding that noise is written as a new state every poll.
+                precision = self.entity_description.suggested_display_precision
+                return val if precision is None else round(val, precision + 1)
         return None
 
 
@@ -410,3 +421,206 @@ class HyCubeBackfillSensor(HyCubeEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         attrs = {k: v for k, v in self.coordinator.last_backfill.items() if k != "time"}
         return attrs
+
+
+def _iso(timestamp: float) -> str:
+    return dt_util.as_local(dt_util.utc_from_timestamp(timestamp)).isoformat()
+
+
+class HyCubePlanSourceSensor(HyCubeEntity, SensorEntity):
+    """Schedule: what supplies the home right now, with the whole plan as attributes."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = SOURCES
+    _unrecorded_attributes = frozenset({"schedule", "slots"})
+
+    def __init__(self, coordinator: HyCubeCoordinator) -> None:
+        super().__init__(coordinator, "plan_source")
+        self._attrs_for: datetime | None = None
+        self._plan_attrs: dict[str, Any] = {}
+
+    @property
+    def available(self) -> bool:
+        # Stays available without a plan so the reason is visible.
+        return True
+
+    @property
+    def native_value(self) -> str | None:
+        slot = self.coordinator.planner.current_slot()
+        return slot.source if slot else None
+
+    def _plan_attributes(self) -> dict[str, Any]:
+        """Attributes that only change with a new plan, built once per plan."""
+        planner = self.coordinator.planner
+        if planner.plan is None or planner.battery is None:
+            return {}
+        if self._attrs_for == planner.calculated:
+            return self._plan_attrs
+        plan, battery = planner.plan, planner.battery
+        last = plan.slots[-1] if plan.slots else None
+        self._plan_attrs = {
+            "horizon_end": _iso(last.start + last.hours * 3600) if last else None,
+            "capacity_kwh": round(battery.capacity, 2),
+            "efficiency": round(battery.charge_eff * 100, 1),
+            "reserve_soc": battery.floor,
+            "schedule": [
+                {
+                    "start": _iso(b.start),
+                    "end": _iso(b.end),
+                    "source": b.source,
+                    "mode": b.mode,
+                    "price": round(b.price, 4),
+                    "load_kwh": round(b.load, 2),
+                    "pv_kwh": round(b.pv, 2),
+                    "grid_kwh": round(b.grid, 2),
+                    "battery_kwh": round(b.battery, 2),
+                    "soc": round(b.soc),
+                }
+                for b in plan.blocks()
+            ],
+            "slots": [
+                {
+                    "start": _iso(s.start),
+                    "source": s.source,
+                    "mode": s.mode,
+                    "price": round(s.price, 4),
+                    "load_kwh": round(s.load, 3),
+                    "pv_kwh": round(s.pv, 3),
+                    "grid_kwh": round(s.grid, 3),
+                    "battery_kwh": round(s.battery, 3),
+                    "soc": round(s.soc, 1),
+                }
+                for s in plan.slots
+            ],
+        }
+        self._attrs_for = planner.calculated
+        return self._plan_attrs
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        planner = self.coordinator.planner
+        slot = planner.current_slot()
+        return {
+            "mode": slot.mode if slot else None,
+            "error": planner.error,
+            "calculated": planner.calculated.isoformat() if planner.calculated else None,
+            "tibber_home": planner.home,
+            "pv_forecast": planner.pv_forecast,
+            "hold_blocked": planner.hold_blocked,
+            "automatic": planner.auto,
+            **self._plan_attributes(),
+        }
+
+
+class HyCubePlanEntity(HyCubeEntity, SensorEntity):
+    """Sensor that needs a schedule."""
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.planner.plan is not None
+
+
+class HyCubePlanModeSensor(HyCubePlanEntity):
+    """Schedule: battery mode the plan asks for right now."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = MODES
+
+    def __init__(self, coordinator: HyCubeCoordinator) -> None:
+        super().__init__(coordinator, "plan_mode")
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.planner.wanted()[0]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        mode, target = self.coordinator.planner.wanted()
+        return {"target_soc": target if mode == MODE_GRID_CHARGE else None}
+
+
+class HyCubeNextGridChargeSensor(HyCubePlanEntity):
+    """Schedule: start of the next stretch of charging from the grid."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator: HyCubeCoordinator) -> None:
+        super().__init__(coordinator, "plan_next_grid_charge")
+
+    @property
+    def native_value(self) -> datetime | None:
+        plan = self.coordinator.planner.plan
+        block = plan.next_grid_charge() if plan else None
+        return dt_util.utc_from_timestamp(block.start) if block else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        plan = self.coordinator.planner.plan
+        block = plan.next_grid_charge() if plan else None
+        if block is None:
+            return {"end": None, "target_soc": None, "energy_kwh": None, "price": None}
+        return {
+            "end": _iso(block.end),
+            "target_soc": round(block.soc),
+            "energy_kwh": round(block.battery, 2),
+            "price": round(block.price, 4),
+        }
+
+
+class HyCubePlanSavingsSensor(HyCubePlanEntity):
+    """Schedule: expected saving against leaving the battery in standard mode."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator: HyCubeCoordinator) -> None:
+        super().__init__(coordinator, "plan_savings")
+        self._attr_native_unit_of_measurement = coordinator.hass.config.currency
+
+    @property
+    def native_value(self) -> float | None:
+        plan = self.coordinator.planner.plan
+        return round(plan.savings, 2) if plan else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        plan = self.coordinator.planner.plan
+        if plan is None:
+            return None
+        return {
+            "cost": round(plan.cost, 2),
+            "cost_standard": round(plan.baseline_cost, 2),
+            "hours": round(sum(s.hours for s in plan.slots), 2),
+        }
+
+
+class HyCubeEfficiencySensor(HyCubeEntity, SensorEntity):
+    """Diagnostics: share of the charged energy the battery gives back."""
+
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_suggested_display_precision = 0
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: HyCubeCoordinator) -> None:
+        super().__init__(coordinator, "efficiency_estimate")
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def native_value(self) -> float | None:
+        efficiency = self.coordinator.efficiency()
+        return None if efficiency is None else round(efficiency * 100, 1)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        est = self.coordinator.charge_capacity
+        return {
+            "charge_kwh_per_100": est.kwh,
+            "samples": est.samples,
+            "last_sample_kwh": est.last_sample,
+            "used_for_schedule": round(
+                self.coordinator.planner.battery_model().charge_eff * 100, 1
+            ),
+        }

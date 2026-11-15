@@ -40,6 +40,13 @@
     "step": {
       "init": {
         "title": "HyCube Optionen",
+        "menu_options": {
+          "device": "Gerät, Profil und Steuerung",
+          "schedule": "Fahrplan (Kostenoptimierung)"
+        }
+      },
+      "device": {
+        "title": "Gerät, Profil und Steuerung",
         "data": {
           "scan_interval": "Abfrageintervall Echtzeitwerte",
           "status_interval": "Abfrageintervall Status",
@@ -58,6 +65,30 @@
           "cmd_standard": "Ein Request pro Zeile, in dieser Reihenfolge. Standard: Netzladung stoppen und Akku-Aufteilung zurücksetzen (85 % Normalbetrieb, 5 % Puffer).",
           "cmd_grid_charge": "{soc} = Ziel-Ladezustand der Netzladung, {current_soc} = aktueller Ladezustand.",
           "cmd_hold": "Standard: Netzladung stoppen und Normalbetrieb auf {hold_active} verkleinern (= 100 − aktueller Ladezustand, mind. 10), damit die Notstrom-Reserve beim aktuellen Ladezustand beginnt. Wird beim PV-Laden nachgezogen. Ungetestet, siehe README."
+        }
+      },
+      "schedule": {
+        "title": "Fahrplan",
+        "description": "Der Fahrplan legt aus Verbrauchsprofil, PV-Prognose des Energie-Dashboards und Tibber-Preisen fest, wann der Akku das Haus versorgt, gehalten wird oder aus dem Netz lädt.",
+        "data": {
+          "tibber_home": "Tibber-Zuhause (optional)",
+          "plan_grid_charge": "Netzladung einplanen",
+          "plan_hold": "Halten einplanen",
+          "grid_charge_power": "Netzladeleistung",
+          "max_charge_soc": "Maximaler Ladezustand bei Netzladung",
+          "efficiency": "Wirkungsgrad des Akkus (optional)",
+          "shift_cost": "Mindestvorteil",
+          "export_price": "Einspeisevergütung",
+          "pv_factor": "Korrekturfaktor PV-Prognose"
+        },
+        "data_description": {
+          "tibber_home": "Leer = das einzige Zuhause oder das, dessen Preis-Sensor im Energie-Dashboard eingetragen ist.",
+          "plan_hold": "Der Akku darf für teurere Stunden aufgespart werden. Lädt die HyCube beim Halten aus dem Netz nach, lässt der Fahrplan den Modus 24 h lang weg.",
+          "grid_charge_power": "Leistung, mit der die HyCube aus dem Netz lädt.",
+          "efficiency": "Anteil der geladenen Energie, den der Akku wieder abgibt. Leer = von der Integration gemessener Wert (bis dahin 80 %).",
+          "shift_cost": "Netzladung und Halten werden nur eingeplant, wenn sie je kWh mehr als diesen Betrag sparen. Deckt Verschleiß und Prognosefehler ab.",
+          "export_price": "Erlös je eingespeister kWh.",
+          "pv_factor": "Multipliziert die PV-Prognose, z. B. 0,9, wenn sie meist zu hoch liegt."
         }
       }
     }
@@ -204,6 +235,32 @@
       },
       "last_backfill": {
         "name": "Letzte Lückenfüllung"
+      },
+      "plan_source": {
+        "name": "Fahrplan Quelle",
+        "state": {
+          "solar": "PV",
+          "battery": "Akku",
+          "grid": "Netz",
+          "grid_charge": "Akku lädt aus dem Netz"
+        }
+      },
+      "plan_mode": {
+        "name": "Fahrplan Batteriemodus",
+        "state": {
+          "standard": "Standard (Eigenverbrauch)",
+          "hold": "Energielevel halten",
+          "grid_charge": "Aus dem Netz laden"
+        }
+      },
+      "plan_next_grid_charge": {
+        "name": "Nächste Netzladung"
+      },
+      "plan_savings": {
+        "name": "Fahrplan erwartete Ersparnis"
+      },
+      "efficiency_estimate": {
+        "name": "Wirkungsgrad (geschätzt)"
       }
     },
     "binary_sensor": {
@@ -238,6 +295,11 @@
     "button": {
       "rebuild_profile": {
         "name": "Verbrauchsprofil neu berechnen"
+      }
+    },
+    "switch": {
+      "plan_auto": {
+        "name": "Fahrplan automatisch ausführen"
       }
     }
   }

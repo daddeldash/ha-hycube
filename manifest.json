@@ -1,6 +1,7 @@
 {
   "domain": "hycube",
   "name": "HyCube",
+  "after_dependencies": ["energy", "tibber"],
   "codeowners": ["@daddeldash"],
   "config_flow": true,
   "dependencies": ["recorder"],
@@ -9,5 +10,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/daddeldash/ha-hycube/issues",
   "requirements": [],
-  "version": "1.0.0"
+  "version": "1.1.0"
 }
