@@ -64,6 +64,7 @@ def _model(forecaster: ConsumptionForecaster) -> dict[str, Any]:
         "temperatures": {day.isoformat(): t for day, t in forecaster.temperatures.items()},
         "measured_error": forecaster.error,
         "pv_correction": asdict(forecaster.pv) if forecaster.pv else None,
+        "audit": asdict(forecaster.audit) if forecaster.audit else None,
     }
 
 
@@ -76,6 +77,10 @@ def _schedule(planner: HyCubePlanner) -> dict[str, Any]:
         "prices_available": planner.home is not None,
         "pv_forecast": planner.pv_forecast,
         "battery_model": asdict(planner.battery_model()),
+        "paused": planner.paused,
+        "peak_charge_w": planner.coordinator.peak_charge,
+        "peak_discharge_w": planner.coordinator.peak_discharge,
+        "expected_savings": plan.expected if plan else None,
         "cost": plan.cost if plan else None,
         "cost_standard": plan.baseline_cost if plan else None,
         "savings": plan.savings if plan else None,

@@ -18,11 +18,13 @@ from homeassistant.components.recorder.statistics import statistics_during_perio
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
 
-from .archive import HOME, PRED, PV_FORECAST, SOLAR
-from .const import CONF_TEMPERATURE_ENTITY, CONF_WEATHER_ENTITY
+from .archive import EXPORT, GRID, HOME, PRED, PRICE, PV_FORECAST, SAVED, SOC, SOLAR
+from .audit import Audit, day_result, summarize
+from .const import CONF_TEMPERATURE_ENTITY, CONF_WEATHER_ENTITY, DOMAIN
 from .energy import to_float
 from .model import (
     KINDS,
@@ -81,6 +83,7 @@ class ConsumptionForecaster:
         self.temperatures: dict[date, float] = {}  # what the forecast is based on
         self.error: tuple[float, float, int] | None = None  # measured: daily, hourly, days
         self.pv: PvCorrection | None = None
+        self.audit: Audit | None = None  # what the schedule really saved
         self._days: list[Day] = []
         self._lock = asyncio.Lock()
 
@@ -126,6 +129,8 @@ class ConsumptionForecaster:
                 self._days = days
                 self.error = measured_error(archive.pairs(HOME, PRED)[-ERROR_DAYS:])
                 self.pv = fit_correction(archive.pairs(SOLAR, PV_FORECAST), today)
+                await self._seed_peaks()
+                self._audit(today)
                 archive.prune_snapshots(today)
             except Exception:  # noqa: BLE001 - learning must never break the integration
                 _LOGGER.exception("HyCube consumption model could not be rebuilt")
@@ -141,10 +146,81 @@ class ConsumptionForecaster:
             self._options.get(CONF_TEMPERATURE_ENTITY) and self._options.get(CONF_WEATHER_ENTITY)
         )
 
+    def _audit(self, today: date) -> None:
+        """Work out what past days really saved and whether the schedule pays."""
+        coordinator = self.coordinator
+        archive = coordinator.archive
+        battery = coordinator.planner.battery_model()
+        empty = [0.0] * 24
+        for day, home, record in list(archive.records(HOME)):
+            after = archive.value(day + timedelta(days=1), SOC)
+            if (
+                day >= today
+                or SAVED in record
+                or after is None
+                or any(key not in record for key in (GRID, PRICE, SOC))
+            ):
+                continue
+            saved = day_result(
+                home,
+                record.get(SOLAR) or empty,
+                record[GRID],
+                record.get(EXPORT) or empty,
+                record[PRICE],
+                record[SOC],
+                after,
+                battery,
+            )
+            if saved is not None:
+                archive.set_value(day, SAVED, round(saved, 3))
+        was_losing = self.audit is not None and self.audit.losing
+        self.audit = summarize(
+            [
+                (day, saved, bool(record.get("active")))
+                for day, saved, record in archive.records(SAVED)
+            ],
+            today,
+        )
+        if self.audit.losing and not was_losing:
+            _LOGGER.warning(
+                "HyCube schedule cost %.2f more than standard operation on %d days; "
+                "it stays in 'standard' until those days are two weeks old",
+                -self.audit.total,
+                self.audit.active_days,
+            )
+
+    async def _seed_peaks(self) -> None:
+        """Take the highest charge and discharge power from the sensors' statistics once."""
+        coordinator = self.coordinator
+        registry = er.async_get(self.hass)
+        end = dt_util.now()
+        for attr, key in (
+            ("peak_charge", "battery_charge_power"),
+            ("peak_discharge", "battery_discharge_power"),
+        ):
+            if getattr(coordinator, attr) is not None:
+                continue
+            entity_id = registry.async_get_entity_id(
+                "sensor", DOMAIN, f"{coordinator.config_entry.unique_id}_{key}"
+            )
+            if not entity_id:
+                continue
+            rows = await self._statistics(
+                entity_id, end - timedelta(days=90), end, "week", "max", None
+            )
+            if rows:
+                setattr(coordinator, attr, max(value for _, value in rows))
+
     async def _statistics(
-        self, entity_id: str, start: datetime, end: datetime, period: str
+        self,
+        entity_id: str,
+        start: datetime,
+        end: datetime,
+        period: str,
+        kind: str = "mean",
+        units: dict[str, str] | None = _UNITS,
     ) -> list[tuple[datetime, float]]:
-        """(local start, mean) of a sensor's long-term statistics."""
+        """(local start, value) of a sensor's long-term statistics."""
         stats = await get_instance(self.hass).async_add_executor_job(
             statistics_during_period,
             self.hass,
@@ -152,12 +228,12 @@ class ConsumptionForecaster:
             dt_util.as_utc(end),
             {entity_id},
             period,
-            _UNITS,
-            {"mean"},
+            units,
+            {kind},
         )
         rows = []
         for row in stats.get(entity_id, []):
-            begin, mean = row.get("start"), row.get("mean")
+            begin, mean = row.get("start"), row.get(kind)
             if begin is None or mean is None:
                 continue
             if isinstance(begin, (int, float)):

@@ -91,9 +91,10 @@ Erreichbar über **Geräte & Dienste → HyCube → Konfigurieren**. Der Dialog 
 | Tibber-Zuhause | leer | Zuhause, dessen Preise gelten. Leer = das einzige Zuhause oder das, dessen Preis-Sensor im Energie-Dashboard eingetragen ist. |
 | Netzladung einplanen | an | Der Fahrplan darf den Akku aus dem Netz laden. |
 | Halten einplanen | an | Der Fahrplan darf den Akku für teurere Stunden aufsparen (Modus *Energielevel halten*). |
-| Netzladeleistung | 2500 W | Leistung, mit der die HyCube aus dem Netz lädt. |
+| Netzladeleistung | 2500 W | Leistung, mit der die HyCube aus dem Netz lädt. Gilt nur, bis die Integration die höchste Ladeleistung selbst gemessen hat. |
 | Maximaler Ladezustand bei Netzladung | 100 % | Höher lädt der Fahrplan nicht aus dem Netz. |
-| Wirkungsgrad des Akkus | leer | Anteil der geladenen Energie, den der Akku wieder abgibt. Leer = der gemessene Wert der Diagnose-Entität **Wirkungsgrad (geschätzt)**, bis dahin 80 %. |
+| Wirkungsgrad des Akkus | leer | Anteil der geladenen Energie, den der Akku wieder abgibt. Leer = der gemessene Wert der Diagnose-Entität **Wirkungsgrad (geschätzt)**, bis dahin 78 %. |
+| Standby-Verbrauch des Speichers | 50 W | Leistung, die der Speicher selbst zieht, solange der Akku Energie hält. Macht langes Aufsparen im Fahrplan teurer. |
 | Mindestvorteil | 1 ct/kWh | Netzladung und Halten werden nur eingeplant, wenn sie je kWh mehr als diesen Betrag sparen. Deckt Verschleiß und Prognosefehler ab. |
 | Einspeisevergütung | 0 ct/kWh | Erlös je eingespeister kWh. |
 | PV-Prognose automatisch korrigieren | an | Die Integration vergleicht Prognose und echte Erzeugung der letzten Wochen und korrigiert die Prognose je Tagesstunde. |
@@ -204,6 +205,13 @@ halten* gilt die Grenze des Standard-Modus: Der Sensor zeigt dann, wie lange der
 der Freigabe reicht. Die Attribute `reserve_soc` (Grenze in %) und `usable_energy_kwh` zeigen die
 verwendeten Werte.
 
+Die HyCube entlädt bis zur Reserve; danach erholt sich die Anzeige um einige Prozent, ohne dass der
+Akku wieder etwas abgibt. Bis 5 % über der Reserve (bei der Standard-Aufteilung bis 20 %) gilt der
+Akku deshalb als leer, auch im Fahrplan. Der Sensor zeigt dann den Zeitpunkt, seit dem der Akku leer
+ist, mit dem Attribut `empty: true`. Solange der Akku Energie hat, steht die Schätzung auf einer
+vollen Viertelstunde und ändert sich erst, wenn sie um mindestens 15 Minuten abweicht. So entsteht
+im Aktivitätsprotokoll nur ein Eintrag, wenn sich wirklich etwas ändert.
+
 ## Fahrplan
 
 Der Fahrplan beantwortet für jede Viertelstunde bis zum Ende der bekannten Preise: Versorgt die PV das
@@ -220,7 +228,8 @@ Eingangsdaten:
   Prognosen je Tagesstunde, sobald mindestens 5 Tage vorliegen. Das gleicht Verschattung, Schmutz und
   eine ungenaue Ausrichtung aus.
 - **Verbrauch**: die [Verbrauchsprognose](#verbrauchsprognose) dieser Integration.
-- **Akku**: aktueller Ladezustand, Reserve-Grenze, gemessene Kapazität und gemessener Wirkungsgrad.
+- **Akku**: aktueller Ladezustand, Reserve-Grenze, gemessene Kapazität, gemessener Wirkungsgrad,
+  höchste gemessene Lade- und Entladeleistung und der Standby-Verbrauch des Speichers.
 
 Der Fahrplan wird jede Viertelstunde neu berechnet, immer ab dem tatsächlichen Ladezustand. Je
 Viertelstunde wählt er einen der drei Batteriemodi:
@@ -240,19 +249,54 @@ Netzladung lohnt sich seltener, als die Preiskurve vermuten lässt: Von 1 kWh au
 nach Lade- und Entladeverlusten etwa 0,75 kWh im Haus an. Der teure Preis muss deshalb rund ein Drittel
 über dem günstigen liegen. An Tagen mit flacher Preiskurve bleibt der Fahrplan beim Modus *Standard*.
 
+### Vorsichtige Planung
+
+Der Fahrplan weicht nur vom Standardbetrieb ab, wenn sich das auch dann lohnt, wenn der Tag anders
+verläuft als vorhergesagt. Lieber bleibt eine mögliche Ersparnis liegen, als dass der Akku unnötig
+aus dem Netz geladen wird.
+
+- Modi und Ladeziel werden für einen ungünstigen Tag berechnet: 25 % weniger Verbrauch, 25 % mehr
+  PV-Ertrag und ein um ein Zehntel schlechterer Wirkungsgrad. Geladen wird also nur, was auch dann
+  gebraucht wird.
+- Der so gefundene Plan wird zusätzlich mit der Prognose selbst und mit einem Tag durchgerechnet, der
+  in die andere Richtung abweicht (mehr Verbrauch, weniger PV). Er gilt nur, wenn er in allen drei
+  Fällen mindestens 5 ct spart. Sonst wird ohne *Energielevel halten* neu geplant, und wenn auch das
+  nicht reicht, bleibt der Akku im Modus *Standard*.
+- Solange der Akku Energie hält, zieht der Speicher selbst Strom (Option **Standby-Verbrauch**).
+  Das zählt in jeder Viertelstunde mit und macht frühes Laden und langes Halten teurer.
+- Für die Ladeleistung gilt die höchste, die die Integration am Akku gemessen hat, für die
+  Entladeleistung ebenso.
+
+### Erfolgskontrolle
+
+Jede Nacht rechnet die Integration den Vortag nach: Sie spielt den echten Verbrauch und die echte
+PV-Erzeugung im Standardbetrieb durch und vergleicht das mit den tatsächlichen Stromkosten (Netzbezug
+mal Preis je Stunde). An Tagen ohne Eingriff müsste dabei null herauskommen; die Abweichung an
+solchen Tagen ist der Fehler des Modells und wird von den Tagen mit Eingriff abgezogen.
+
+Der Sensor **Fahrplan tatsächliche Ersparnis** zeigt die Summe über die Tage mit Eingriff der letzten
+14 Tage. Liegt sie bei mindestens drei solchen Tagen im Minus, plant der Fahrplan nur noch *Standard*
+(Attribut `paused` an **Fahrplan Quelle**) und schreibt eine Warnung ins Log, bis die Verlusttage
+älter als zwei Wochen sind.
+
 ### Sensoren
 
 - **Fahrplan Quelle**: was das Haus gerade laut Plan versorgt (*PV*, *Akku*, *Netz*, *Akku lädt aus dem
   Netz*). Attribute: `schedule` (zusammengefasste Abschnitte mit `start`, `end`, `source`, `mode`,
   `price`, `load_kwh`, `pv_kwh`, `grid_kwh`, `battery_kwh`, `soc`), `slots` (dieselben Werte je
   Viertelstunde, z. B. für ApexCharts), `horizon_end`, `capacity_kwh`, `efficiency`, `reserve_soc`,
-  `tibber_home`, `pv_forecast`, `hold_blocked`, `automatic` und `error`. Ohne Plan nennt `error` den
+  `tibber_home`, `pv_forecast`, `hold_blocked`, `paused`, `automatic` und `error`. Ohne Plan nennt `error` den
   Grund: `no_prices` (keine Tibber-Preise), `no_profile` (Verbrauchsprofil noch leer), `no_soc`
   (Ladezustand unbekannt) oder `failed`.
 - **Fahrplan Batteriemodus**: der Modus, den der Plan jetzt vorsieht, bei Netzladung mit `target_soc`.
-- **Nächste Netzladung**: Beginn des nächsten Ladeabschnitts, mit Ende, Ziel-Ladezustand, Energie und Preis.
-- **Fahrplan erwartete Ersparnis**: Ersparnis gegenüber durchgehendem Standardbetrieb bis zum Ende
-  des Plans, mit den Kosten beider Varianten als Attribute.
+- **Nächste Netzladung**: Beginn des nächsten Ladeabschnitts, mit Ende, Ziel-Ladezustand, Energie und
+  Preis. Attribute `charge_power_w` (angenommene Ladeleistung), `peak_charge_w` und `peak_discharge_w`
+  (höchste gemessene Leistungen).
+- **Fahrplan Ersparnis (mindestens)**: Ersparnis gegenüber durchgehendem Standardbetrieb im
+  ungünstigsten der drei geprüften Fälle. Das Attribut `expected` nennt die Ersparnis, wenn die
+  Prognose eintrifft; dazu die Kosten mit Plan und im Standardbetrieb.
+- **Fahrplan tatsächliche Ersparnis**: Ergebnis der Erfolgskontrolle, mit den Tagen mit Eingriff,
+  dem Modellfehler je Tag und dem Ergebnis je Tag als Attribute.
 
 ### Automatisch ausführen
 
@@ -305,7 +349,7 @@ Externe Erzeugung*, Hausverbrauch · Batterie gespeicherte Energie
 24 h / morgen
 
 **Sensoren (Fahrplan)**: Fahrplan Quelle, Fahrplan Batteriemodus, Nächste Netzladung, Fahrplan
-erwartete Ersparnis
+Ersparnis (mindestens), Fahrplan tatsächliche Ersparnis
 
 **Diagnose**: Batteriekapazität (geschätzt) · Wirkungsgrad (geschätzt) · Verbrauchsmodell ·
 Verbrauchsprognose Fehler · PV-Prognose Korrektur · Letzte Lückenfüllung (mit Lückenlänge, nachgetragener
@@ -356,7 +400,7 @@ Verwendete Endpunkte der HyCube:
 
 ## Entwicklung
 
-Die Rechenlogik (`energy.py`, `profile.py`, `archive.py`, `model.py`, `solar.py`, `optimizer.py`)
+Die Rechenlogik (`energy.py`, `profile.py`, `archive.py`, `model.py`, `solar.py`, `optimizer.py`, `audit.py`)
 kommt ohne Home Assistant aus und wird mit der Standardbibliothek getestet. `-P` verhindert, dass
 Module des Repositorys (`select.py`, `profile.py`) Module der Standardbibliothek verdecken:
 

@@ -34,9 +34,8 @@ def cold_house(hass: HomeAssistant, api):
     api.get_day_stats.side_effect = lambda day: day_stats(heat_pump_watts(day))
     api.get_day_stats.return_value = None
 
-    async def statistics(self, entity_id, start, end, period):
-        assert entity_id == SENSOR
-        if period == "hour":
+    async def statistics(self, entity_id, start, end, period, *args):
+        if entity_id != SENSOR or period != "day":
             return []
         rows, day = [], start
         while day < end:

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -42,6 +43,8 @@ from .const import (
     EFFICIENCY_MIN_SAMPLES,
     ENERGY_BATTERY_CHARGE,
     ENERGY_BATTERY_DISCHARGE,
+    ENERGY_GRID_EXPORT,
+    ENERGY_GRID_IMPORT,
     ENERGY_HOME,
     ENERGY_SOLAR,
     GAP_BACKFILL_FACTOR,
@@ -64,6 +67,8 @@ from .const import (
     MODE_HOLD,
     MODE_STANDARD,
     MODES,
+    PEAK_MIN_POWER,
+    PEAK_WINDOW,
     STALE_TOLERANCE,
     STORAGE_SAVE_DELAY,
     STORAGE_VERSION,
@@ -139,6 +144,10 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         # Hourly consumption and PV production of all past days, kept for good.
         self.archive = Archive()
         self._rebuild_lock = asyncio.Lock()
+        # Highest battery power held for a minute, W.
+        self.peak_charge: float | None = None
+        self.peak_discharge: float | None = None
+        self._recent_power: deque[tuple[float, float]] = deque()
         self._status_interval = entry.options.get(
             CONF_STATUS_INTERVAL, DEFAULT_STATUS_INTERVAL
         )
@@ -179,6 +188,8 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         self.hold_active = stored.get("hold_active")
         self.profile = ConsumptionProfile.from_dict(stored.get("profile"))
         self.forecaster.restore(stored.get("forecaster"))
+        self.peak_charge = to_float(stored.get("peak_charge"))
+        self.peak_discharge = to_float(stored.get("peak_discharge"))
         if (archived := await self._archive_store.async_load()) is not None:
             self.archive = Archive(archived)
         else:
@@ -231,6 +242,8 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
             "hold_active": self.hold_active,
             "profile": self.profile.as_dict(),
             "forecaster": self.forecaster.as_dict(),
+            "peak_charge": self.peak_charge,
+            "peak_discharge": self.peak_discharge,
             "last_backfill": self.last_backfill,
             "capacity": self.capacity.as_dict(),
             "charge_capacity": self.charge_capacity.as_dict(),
@@ -290,6 +303,7 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
             self._check_hold(values)
         elif self.mode == MODE_STANDARD and now < self._release_until:
             self._check_release(values, now)
+        self._track_peaks(now, to_float(values.get("Battery_P")))
         if self._hold_left_at is not None and (
             (to_float(values.get("Battery_P")) or 0.0) < -HOLD_RELEASE_GRID_MIN
             or now - self._hold_left_at >= HOLD_RELEASE_IDLE
@@ -435,6 +449,34 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         return float(
             self.config_entry.options.get(CONF_BATTERY_CAPACITY, DEFAULT_BATTERY_CAPACITY)
         )
+
+    def _track_peaks(self, now: float, power: float | None) -> None:
+        """Remember the highest charge and discharge power held for a minute."""
+        window = self._recent_power
+        if power is None:
+            window.clear()
+            return
+        window.append((now, power))
+        while now - window[0][0] > PEAK_WINDOW:
+            window.popleft()
+        if now - window[0][0] < PEAK_WINDOW * 0.8:
+            return  # not a full minute of samples yet
+        lowest = min(p for _, p in window)
+        highest = max(p for _, p in window)
+        if lowest > (self.peak_charge or 0.0):
+            self.peak_charge = lowest
+        if -highest > (self.peak_discharge or 0.0):
+            self.peak_discharge = -highest
+
+    def charge_power(self) -> float | None:
+        """W the battery was seen charging with at most, if that is known."""
+        peak = self.peak_charge
+        return peak if peak is not None and peak >= PEAK_MIN_POWER else None
+
+    def discharge_power(self) -> float | None:
+        """W the battery was seen delivering at most, if that is known."""
+        peak = self.peak_discharge
+        return peak if peak is not None and peak >= PEAK_MIN_POWER else None
 
     def release_idle_seconds(self) -> float:
         """How long the battery may still not discharge after "hold" was left."""
@@ -643,6 +685,8 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
                 day,
                 _day_hours(buckets, ENERGY_HOME, day, tz),
                 _day_hours(buckets, ENERGY_SOLAR, day, tz),
+                _day_hours(buckets, ENERGY_GRID_IMPORT, day, tz),
+                _day_hours(buckets, ENERGY_GRID_EXPORT, day, tz),
             )
         if fetched:
             self.archive.check_complete()

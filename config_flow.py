@@ -32,6 +32,7 @@ from .const import (
     CONF_PV_FACTOR,
     CONF_SCAN_INTERVAL,
     CONF_SHIFT_COST,
+    CONF_STANDBY_POWER,
     CONF_STATUS_INTERVAL,
     CONF_TEMPERATURE_ENTITY,
     CONF_TIBBER_HOME,
@@ -47,6 +48,7 @@ from .const import (
     DEFAULT_PV_FACTOR,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SHIFT_COST,
+    DEFAULT_STANDBY_POWER,
     DEFAULT_STATUS_INTERVAL,
     DEFAULT_USERNAME,
     DOMAIN,
@@ -79,6 +81,7 @@ SCHEDULE_OPTIONS = (
     CONF_EXPORT_PRICE,
     CONF_PV_FACTOR,
     CONF_PV_AUTO_CORRECT,
+    CONF_STANDBY_POWER,
 )
 
 
@@ -225,7 +228,7 @@ class HyCubeOptionsFlow(OptionsFlow):
 
     async def async_step_schedule(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
-            for key in (CONF_GRID_CHARGE_POWER, CONF_MAX_CHARGE_SOC):
+            for key in (CONF_GRID_CHARGE_POWER, CONF_MAX_CHARGE_SOC, CONF_STANDBY_POWER):
                 user_input[key] = int(user_input[key])
             return self._save(user_input, SCHEDULE_OPTIONS)
 
@@ -260,6 +263,10 @@ class HyCubeOptionsFlow(OptionsFlow):
                     default=opts.get(CONF_MAX_CHARGE_SOC, DEFAULT_MAX_CHARGE_SOC),
                 ): _number(20, 100, 5, "%"),
                 vol.Optional(CONF_EFFICIENCY): _number(50, 100, 1, "%"),
+                vol.Required(
+                    CONF_STANDBY_POWER,
+                    default=opts.get(CONF_STANDBY_POWER, DEFAULT_STANDBY_POWER),
+                ): _number(0, 200, 5, "W"),
                 vol.Required(
                     CONF_SHIFT_COST, default=opts.get(CONF_SHIFT_COST, DEFAULT_SHIFT_COST)
                 ): _number(0, 20, 0.1, "ct/kWh"),

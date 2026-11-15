@@ -3,14 +3,20 @@
 One record per local day, kept for good so the consumption model can learn
 from months and years:
 
-  home   24 hourly kWh the household consumed
-  solar  24 hourly kWh the PV produced
-  temp   mean outdoor temperature of the day, deg C
-  pred   consumption forecast as it stood at the start of the day
-  pv_fc  PV forecast as it stood at the start of the day
+  home    24 hourly kWh the household consumed
+  solar   24 hourly kWh the PV produced
+  grid    24 hourly kWh taken from the grid
+  export  24 hourly kWh fed into the grid
+  temp    mean outdoor temperature of the day, deg C
+  pred    consumption forecast as it stood at the start of the day
+  pv_fc   PV forecast as it stood at the start of the day
+  price   24 hourly grid prices, EUR/kWh
+  soc     % state of charge at the start of the day
+  active  the schedule put the battery into "hold" or "grid charge"
+  saved   EUR the day cost less than "standard" would have (see audit.py)
 
-`pred` and `pv_fc` only serve to measure forecast errors and are dropped
-after SNAPSHOT_DAYS. A day the device had no data for is marked `empty` so
+`pred`, `pv_fc` and `price` only serve to judge the forecasts and the
+schedule and are dropped after SNAPSHOT_DAYS. A day the device had no data for is marked `empty` so
 it is not asked for again.
 """
 
@@ -25,6 +31,12 @@ SOLAR = "solar"
 TEMP = "temp"
 PRED = "pred"
 PV_FORECAST = "pv_fc"
+GRID = "grid"
+EXPORT = "export"
+PRICE = "price"
+SOC = "soc"
+ACTIVE = "active"
+SAVED = "saved"
 EMPTY = "empty"
 
 SNAPSHOT_DAYS = 120
@@ -75,10 +87,17 @@ class Archive:
         record = self.days.get(day.isoformat(), {})
         return HOME in record or SOLAR in record or EMPTY in record
 
-    def set_energy(self, day: date, home: Hours | None, solar: Hours | None) -> None:
+    def set_energy(
+        self,
+        day: date,
+        home: Hours | None,
+        solar: Hours | None,
+        grid: Hours | None = None,
+        export: Hours | None = None,
+    ) -> None:
         """Store what the device returned for a day; None means no data."""
         record = self.days.setdefault(day.isoformat(), {})
-        for key, hours in ((HOME, home), (SOLAR, solar)):
+        for key, hours in ((HOME, home), (SOLAR, solar), (GRID, grid), (EXPORT, export)):
             if (values := _clean(hours)) is not None:
                 record[key] = values
         if HOME in record or SOLAR in record:
@@ -178,10 +197,20 @@ class Archive:
         """Drop forecasts that are too old to matter for the error figures."""
         limit = (today - timedelta(days=SNAPSHOT_DAYS)).isoformat()
         for day, record in self.days.items():
-            if day < limit and (PRED in record or PV_FORECAST in record):
-                record.pop(PRED, None)
-                record.pop(PV_FORECAST, None)
+            if day < limit and any(key in record for key in (PRED, PV_FORECAST, PRICE)):
+                for key in (PRED, PV_FORECAST, PRICE):
+                    record.pop(key, None)
                 self.dirty = True
+
+    # --- single values ------------------------------------------------------------------
+    def value(self, day: date, key: str) -> Any:
+        return self.days.get(day.isoformat(), {}).get(key)
+
+    def set_value(self, day: date, key: str, value: Any) -> None:
+        record = self.days.setdefault(day.isoformat(), {})
+        if record.get(key) != value:
+            record[key] = value
+            self.dirty = True
 
     def pairs(self, actual: str, forecast: str) -> list[tuple[date, list, list]]:
         """(day, actual hours, forecast hours) where both exist, oldest first."""

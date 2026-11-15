@@ -23,12 +23,16 @@ therefore keeps the battery idle for `release_slots` slots after leaving
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .const import (
+    CAUTION_EFFICIENCY,
+    CAUTION_LOAD,
+    CAUTION_PV,
     MODE_GRID_CHARGE,
     MODE_HOLD,
     MODE_STANDARD,
+    PLAN_MIN_GAIN,
     PLAN_SWITCH_COST,
     SOURCE_BATTERY,
     SOURCE_GRID,
@@ -71,6 +75,10 @@ class Battery:
     shift_cost: float = 0.01  # EUR per kWh held back or grid charged
     switch_cost: float = PLAN_SWITCH_COST  # EUR per mode change
     release_slots: int = 0  # slots without discharge after leaving "hold"
+    # kW the storage system draws itself while the battery holds energy above
+    # the reserve; with an empty battery it sleeps.
+    standby: float = 0.0
+    discharge_power: float | None = None  # kW the battery can deliver at most
     allow_hold: bool = True
     allow_grid_charge: bool = True
 
@@ -117,6 +125,14 @@ class Plan:
     cost: float  # EUR, grid import minus export revenue
     baseline_cost: float  # EUR with "standard" throughout
     savings: float  # EUR against the baseline, leftover energy accounted for
+    # EUR saved if the forecast comes true; `savings` may rest on more
+    # cautious assumptions and is then the lower bound.
+    expected: float | None = None
+
+    def grid_target(self) -> float | None:
+        """Highest % SoC a grid charge of this plan ends at."""
+        reached = [s.soc for s in self.slots if s.mode == MODE_GRID_CHARGE]
+        return max(reached) if reached else None
 
     def blocks(self) -> list[Block]:
         """Slots merged into stretches of equal mode and source."""
@@ -164,6 +180,7 @@ def _step(
     """Run one slot in a mode or idle; None if the mode makes no sense here."""
     net = slot.load - slot.pv
     imp = exp = batt = pen = 0.0
+    awake = e > e_min + 1e-6
     if net < 0:
         # Surplus charges the battery in every mode, the rest is exported.
         charged = max(min(-net, (e_max - e) / bat.charge_eff), 0.0)
@@ -172,6 +189,8 @@ def _step(
         batt = charged
     elif mode == MODE_STANDARD:
         delivered = max(min(net, e - e_min), 0.0)
+        if bat.discharge_power is not None:
+            delivered = min(delivered, bat.discharge_power * slot.hours)
         e -= delivered
         imp = net - delivered
         batt = -delivered
@@ -189,6 +208,8 @@ def _step(
         imp += taken
         batt += taken
         pen = bat.shift_cost * taken * bat.grid_eff
+    if bat.standby and (awake or e > e_min + 1e-6):
+        imp += bat.standby * slot.hours
     return (e, imp * slot.price - exp * bat.export_price, pen, imp, exp, batt)
 
 
@@ -387,3 +408,94 @@ def optimize(
     if savings <= 1e-6:
         return baseline  # never leave "standard" without a gain
     return Plan(planned, money, base_money, savings)
+
+
+def _start(soc: float, bat: Battery, mode: str, idle_slots: int) -> tuple[float, _State, tuple]:
+    e_min = bat.floor / 100 * bat.capacity
+    e_max = max(bat.ceiling / 100 * bat.capacity, e_min)
+    e_grid = min(e_max, bat.max_grid_soc / 100 * bat.capacity)
+    idle = min(max(idle_slots, 0), max(bat.release_slots, 0)) if mode == MODE_STANDARD else 0
+    return min(max(soc / 100 * bat.capacity, e_min), e_max), (mode, idle), (e_min, e_max, e_grid)
+
+
+def standard_day(slots: Sequence[Slot], soc: float, bat: Battery) -> tuple[float, float]:
+    """Cost in EUR and final % SoC of running the slots in "standard" throughout."""
+    e_start, state, limits = _start(soc, bat, MODE_STANDARD, 0)
+    _, money, left = _run(slots, e_start, [MODE_STANDARD] * len(slots), state, bat, limits)
+    return money, left / bat.capacity * 100
+
+
+def replay(
+    slots: Sequence[Slot],
+    soc: float,
+    bat: Battery,
+    plan: Plan,
+    mode: str = MODE_STANDARD,
+    idle_slots: int = 0,
+) -> Plan:
+    """Carry out the modes of `plan` on other slots or with another battery.
+
+    As on the device, grid charging stops at the SoC the plan aimed for.
+    `savings` of the result is what that saves against "standard".
+    """
+    target = plan.grid_target()
+    if target is not None:
+        bat = replace(bat, max_grid_soc=target)
+    e_start, state, limits = _start(soc, bat, mode, idle_slots)
+    planned, money, left = _run(slots, e_start, [s.mode for s in plan.slots], state, bat, limits)
+    _, base_money, base_left = _run(
+        slots, e_start, [MODE_STANDARD] * len(slots), state, bat, limits
+    )
+    leftover = max(min((s.price for s in slots), default=0.0), 0.0)
+    saved = (base_money - leftover * base_left) - (money - leftover * left)
+    return Plan(planned, money, base_money, saved, saved)
+
+
+def _scaled(slots: Sequence[Slot], load: float, pv: float) -> list[Slot]:
+    return [Slot(s.start, s.hours, s.price, s.load * load, s.pv * pv) for s in slots]
+
+
+def cautious_plan(
+    slots: Sequence[Slot],
+    soc: float,
+    bat: Battery,
+    mode: str = MODE_STANDARD,
+    idle_slots: int = 0,
+    *,
+    load: float = CAUTION_LOAD,
+    pv: float = CAUTION_PV,
+    efficiency: float = CAUTION_EFFICIENCY,
+    min_gain: float = PLAN_MIN_GAIN,
+) -> Plan:
+    """A plan that leaves "standard" only if that pays whatever the day brings.
+
+    The modes and the grid-charge target are optimised for a day with less
+    consumption, more PV and a worse battery than forecast, so nothing is
+    charged that may not be needed. The result is then carried out on the
+    forecast itself and on a day that errs the other way; it is kept if it
+    saves at least `min_gain` EUR in all three cases. If not, the same is
+    tried without "hold", and failing that the battery stays in "standard".
+
+    The returned plan shows the slots as forecast. `savings` is the worst of
+    the three cases, `expected` the saving if the forecast comes true.
+    """
+    worse = replace(
+        bat, charge_eff=bat.charge_eff * efficiency, grid_eff=bat.grid_eff * efficiency
+    )
+    low = _scaled(slots, load, pv)
+    high = _scaled(slots, 2 - load, max(2 - pv, 0.0))
+    for candidate in dict.fromkeys((worse, replace(worse, allow_hold=False))):
+        decided = optimize(low, soc, candidate, mode, idle_slots)
+        if all(s.mode == MODE_STANDARD for s in decided.slots):
+            break
+        shown = replay(slots, soc, bat, decided, mode, idle_slots)
+        worst = min(
+            decided.savings,
+            shown.savings,
+            replay(high, soc, worse, decided, mode, idle_slots).savings,
+        )
+        if worst >= min_gain:
+            return Plan(shown.slots, shown.cost, shown.baseline_cost, worst, shown.savings)
+    e_start, state, limits = _start(soc, bat, mode, idle_slots)
+    planned, money, _ = _run(slots, e_start, [MODE_STANDARD] * len(slots), state, bat, limits)
+    return Plan(planned, money, money, 0.0, 0.0)

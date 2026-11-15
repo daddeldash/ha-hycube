@@ -27,6 +27,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BATTERY_REST_MARGIN,
     CONF_BATTERY_CAPACITY,
     DEFAULT_BATTERY_CAPACITY,
     ENERGY_BATTERY_CHARGE,
@@ -191,6 +192,7 @@ async def async_setup_entry(
         HyCubeConsumptionModelSensor(coordinator),
         HyCubeForecastErrorSensor(coordinator),
         HyCubePvCorrectionSensor(coordinator),
+        HyCubeRealizedSavingsSensor(coordinator),
     ]
     async_add_entities(entities)
 
@@ -302,42 +304,75 @@ class HyCubeCapacityEstimateSensor(HyCubeEntity, SensorEntity):
 
 
 class HyCubeBatteryEmptySensor(HyCubeEntity, SensorEntity):
-    """When the battery reaches its reserve at profile consumption, without PV."""
+    """When the battery reaches its reserve at forecast consumption, without PV.
+
+    The value is a timestamp and every change shows up in the logbook, so it
+    is kept still: an empty battery reports since when it is empty, and the
+    estimate moves in steps of a quarter of an hour.
+    """
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _STEP = timedelta(minutes=15)
 
     def __init__(self, coordinator: HyCubeCoordinator) -> None:
         super().__init__(coordinator, "battery_empty_estimate")
+        self._empty_since: datetime | None = None
+        self._reported: datetime | None = None
 
     def _usable(self) -> float | None:
-        """kWh above the reserve limit."""
+        """kWh the battery still delivers.
+
+        It stops at the reserve and its reading then recovers a few percent,
+        so a state of charge just above the reserve counts as empty.
+        """
         if (soc := _soc(self.coordinator)) is None:
             return None
         floor = self.coordinator.discharge_floor()
-        return max(soc - floor, 0.0) / 100 * _capacity(self.coordinator)
+        if soc <= floor + BATTERY_REST_MARGIN:
+            return 0.0
+        return (soc - floor) / 100 * _capacity(self.coordinator)
 
-    @property
-    def native_value(self) -> datetime | None:
+    def _estimate(self, remaining: float) -> datetime | None:
         profile = self.coordinator.profile
-        if (remaining := self._usable()) is None or not profile.ready:
-            return None
         cursor = dt_util.now()
         for _ in range(48):
             hour_end = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
             need = profile.forecast(cursor, hour_end) or 0.0
             if need >= remaining:
                 frac = remaining / need if need else 0
-                empty = cursor + (hour_end - cursor) * frac
-                return empty.replace(second=0, microsecond=0)
+                return cursor + (hour_end - cursor) * frac
             remaining -= need
             cursor = hour_end
         return None  # lasts more than 48 h
 
     @property
+    def native_value(self) -> datetime | None:
+        if (remaining := self._usable()) is None or not self.coordinator.profile.ready:
+            return None
+        if remaining <= 0:
+            if self._empty_since is None:
+                self._empty_since = dt_util.now().replace(second=0, microsecond=0)
+            self._reported = None
+            return self._empty_since
+        self._empty_since = None
+        if (estimate := self._estimate(remaining)) is None:
+            self._reported = None
+            return None
+        # Only move once the estimate is a full step away from what is shown.
+        if self._reported is None or abs(estimate - self._reported) >= self._STEP:
+            self._reported = estimate.replace(
+                minute=estimate.minute // 15 * 15, second=0, microsecond=0
+            )
+        return self._reported
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
         usable = self._usable()
+        floor = self.coordinator.discharge_floor()
         return {
-            "reserve_soc": self.coordinator.discharge_floor(),
+            "empty": None if usable is None else usable <= 0,
+            "reserve_soc": floor,
+            "empty_below_soc": floor + BATTERY_REST_MARGIN,
             "usable_energy_kwh": None if usable is None else round(usable, 2),
         }
 
@@ -516,6 +551,7 @@ class HyCubePlanSourceSensor(HyCubeEntity, SensorEntity):
             "tibber_home": planner.home,
             "pv_forecast": planner.pv_forecast,
             "hold_blocked": planner.hold_blocked,
+            "paused": planner.paused,
             "automatic": planner.auto,
             **self._plan_attributes(),
         }
@@ -566,18 +602,30 @@ class HyCubeNextGridChargeSensor(HyCubePlanEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         plan = self.coordinator.planner.plan
         block = plan.next_grid_charge() if plan else None
+        coordinator = self.coordinator
+        power = {
+            "charge_power_w": round(coordinator.planner.grid_charge_power()),
+            "peak_charge_w": _rounded(coordinator.peak_charge),
+            "peak_discharge_w": _rounded(coordinator.peak_discharge),
+        }
         if block is None:
-            return {"end": None, "target_soc": None, "energy_kwh": None, "price": None}
+            return {"end": None, "target_soc": None, "energy_kwh": None, "price": None, **power}
         return {
             "end": _iso(block.end),
             "target_soc": round(block.soc),
             "energy_kwh": round(block.battery, 2),
             "price": round(block.price, 4),
+            **power,
         }
 
 
+def _rounded(value: float | None) -> int | None:
+    return None if value is None else round(value)
+
+
 class HyCubePlanSavingsSensor(HyCubePlanEntity):
-    """Schedule: expected saving against leaving the battery in standard mode."""
+    """Schedule: saving against standard mode, with the cautious assumptions
+    the plan was decided on; `expected` is the figure if the forecast holds."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_suggested_display_precision = 2
@@ -597,6 +645,7 @@ class HyCubePlanSavingsSensor(HyCubePlanEntity):
         if plan is None:
             return None
         return {
+            "expected": None if plan.expected is None else round(plan.expected, 2),
             "cost": round(plan.cost, 2),
             "cost_standard": round(plan.baseline_cost, 2),
             "hours": round(sum(s.hours for s in plan.slots), 2),
@@ -733,4 +782,34 @@ class HyCubePvCorrectionSensor(HyCubeEntity, SensorEntity):
             "hourly": list(correction.hourly) if correction else None,
             "days": correction.days if correction else 0,
             "used_for_schedule": self.coordinator.planner.pv_correction() is not None,
+        }
+
+
+class HyCubeRealizedSavingsSensor(HyCubeEntity, SensorEntity):
+    """What the schedule really saved over the last two weeks."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator: HyCubeCoordinator) -> None:
+        super().__init__(coordinator, "plan_realized_savings")
+        self._attr_native_unit_of_measurement = coordinator.hass.config.currency
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def native_value(self) -> float | None:
+        audit = self.coordinator.forecaster.audit
+        return audit.total if audit and audit.active_days else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        audit = self.coordinator.forecaster.audit
+        return {
+            "active_days": audit.active_days if audit else 0,
+            "model_error_per_day": audit.bias if audit else None,
+            "days": audit.days if audit else {},
+            "paused": self.coordinator.planner.paused,
         }
