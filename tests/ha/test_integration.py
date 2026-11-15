@@ -33,7 +33,7 @@ async def test_schedule_sensors(hass: HomeAssistant, api, tibber) -> None:
     assert state(hass, "sensor", "plan_mode").state == "grid_charge"
     assert state(hass, "sensor", "plan_next_grid_charge").attributes["target_soc"] > 40
     assert float(state(hass, "sensor", "plan_savings").state) > 0
-    assert state(hass, "sensor", "efficiency_estimate").attributes["used_for_schedule"] == 80
+    assert state(hass, "sensor", "efficiency_estimate").attributes["used_for_schedule"] == 78
     # Float noise of the device is rounded away.
     assert state(hass, "sensor", "grid_power").state == "500.0"
 

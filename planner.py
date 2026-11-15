@@ -19,8 +19,9 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
 
-from .archive import PV_FORECAST
+from .archive import ACTIVE, PRICE, PV_FORECAST, SOC
 from .const import (
+    BATTERY_REST_MARGIN,
     CONF_CONTROL_ENABLED,
     CONF_EFFICIENCY,
     CONF_EXPORT_PRICE,
@@ -31,6 +32,7 @@ from .const import (
     CONF_PV_AUTO_CORRECT,
     CONF_PV_FACTOR,
     CONF_SHIFT_COST,
+    CONF_STANDBY_POWER,
     CONF_TIBBER_HOME,
     DEFAULT_EFFICIENCY,
     DEFAULT_EXPORT_PRICE,
@@ -38,6 +40,7 @@ from .const import (
     DEFAULT_MAX_CHARGE_SOC,
     DEFAULT_PV_FACTOR,
     DEFAULT_SHIFT_COST,
+    DEFAULT_STANDBY_POWER,
     DOMAIN,
     GRID_CHARGE_AC_EFFICIENCY,
     HOLD_BLOCK_SECONDS,
@@ -47,7 +50,7 @@ from .const import (
     MODE_STANDARD,
     PLAN_SLOT_MINUTES,
 )
-from .optimizer import Battery, Plan, PlannedSlot, Slot, optimize
+from .optimizer import Battery, Plan, PlannedSlot, Slot, cautious_plan
 
 if TYPE_CHECKING:
     from .coordinator import HyCubeCoordinator
@@ -184,10 +187,15 @@ class HyCubePlanner:
         if not slots:
             self.plan, self.error = None, "no_prices"
             return
+        await self._remember_day(now, soc)
         battery = self.battery_model()
+        if soc <= battery.floor + BATTERY_REST_MARGIN:
+            # At rest after discharging: the reading sits a little above the
+            # reserve, but the battery delivers nothing from there.
+            soc = battery.floor
         idle_slots = math.ceil(coordinator.release_idle_seconds() / _SLOT_SECONDS)
         self.plan = await self.hass.async_add_executor_job(
-            optimize, slots, soc, battery, coordinator.mode, idle_slots
+            cautious_plan, slots, soc, battery, coordinator.mode, idle_slots
         )
         self.battery = battery
         self.pv_forecast = pv is not None
@@ -306,6 +314,32 @@ class HyCubePlanner:
         if coordinator.archive.set_snapshot(start.date(), PV_FORECAST, hours):
             await coordinator.async_save_archive()
 
+    async def _remember_day(self, now: datetime, soc: float) -> None:
+        """Keep what the audit of the day needs: prices, SoC at midnight, deviations."""
+        coordinator = self.coordinator
+        archive = coordinator.archive
+        start = dt_util.start_of_local_day(now)
+        today = start.date()
+        if archive.value(today, PRICE) is None:
+            hours: list[float | None] = []
+            for hour in range(24):
+                begin = (start + timedelta(hours=hour)).timestamp()
+                values = [p for t, p in self._prices if begin <= t < begin + 3600]
+                hours.append(sum(values) / len(values) if values else None)
+            if all(v is not None for v in hours):
+                archive.set_snapshot(today, PRICE, hours)
+        if archive.value(today, SOC) is None and (now - start).total_seconds() < 1200:
+            archive.set_value(today, SOC, soc)
+        if coordinator.mode != MODE_STANDARD:
+            archive.set_value(today, ACTIVE, True)
+        await coordinator.async_save_archive()
+
+    @property
+    def paused(self) -> bool:
+        """The audit found the schedule losing money: only "standard" is planned."""
+        audit = self.coordinator.forecaster.audit
+        return audit is not None and audit.losing
+
     def pv_correction(self) -> Any:
         """Learned correction of the PV forecast, None if unknown or switched off."""
         if not self._options.get(CONF_PV_AUTO_CORRECT, True):
@@ -358,6 +392,12 @@ class HyCubePlanner:
             )
         return slots
 
+    def grid_charge_power(self) -> float:
+        """W taken from the grid while charging: measured peak, else the option."""
+        if (peak := self.coordinator.charge_power()) is not None:
+            return peak / GRID_CHARGE_AC_EFFICIENCY
+        return float(self._options.get(CONF_GRID_CHARGE_POWER, DEFAULT_GRID_CHARGE_POWER))
+
     def battery_model(self) -> Battery:
         """Battery as measured by the integration, with the plan options."""
         coordinator = self.coordinator
@@ -366,21 +406,25 @@ class HyCubePlanner:
             efficiency = float(override) / 100
         else:
             efficiency = coordinator.efficiency() or DEFAULT_EFFICIENCY
+        discharge = coordinator.discharge_power()
         return Battery(
             capacity=coordinator.usable_capacity(),
             floor=coordinator.discharge_floor(),
             charge_eff=efficiency,
             grid_eff=efficiency * GRID_CHARGE_AC_EFFICIENCY,
-            grid_power=float(options.get(CONF_GRID_CHARGE_POWER, DEFAULT_GRID_CHARGE_POWER))
-            / 1000,
+            grid_power=self.grid_charge_power() / 1000,
+            standby=float(options.get(CONF_STANDBY_POWER, DEFAULT_STANDBY_POWER)) / 1000,
+            discharge_power=None if discharge is None else discharge / 1000,
             max_grid_soc=float(options.get(CONF_MAX_CHARGE_SOC, DEFAULT_MAX_CHARGE_SOC)),
             export_price=float(options.get(CONF_EXPORT_PRICE, DEFAULT_EXPORT_PRICE)) / 100,
             shift_cost=float(options.get(CONF_SHIFT_COST, DEFAULT_SHIFT_COST)) / 100,
             release_slots=math.ceil(HOLD_RELEASE_IDLE / _SLOT_SECONDS),
             allow_hold=bool(options.get(CONF_PLAN_HOLD, True))
             and not self.hold_blocked
+            and not self.paused
             and bool(coordinator.command_for(MODE_HOLD)),
             allow_grid_charge=bool(options.get(CONF_PLAN_GRID_CHARGE, True))
+            and not self.paused
             and bool(coordinator.command_for(MODE_GRID_CHARGE)),
         )
 

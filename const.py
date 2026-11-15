@@ -34,6 +34,7 @@ CONF_SHIFT_COST: Final = "shift_cost"
 CONF_EXPORT_PRICE: Final = "export_price"
 CONF_PV_FACTOR: Final = "pv_factor"
 CONF_PV_AUTO_CORRECT: Final = "pv_auto_correct"
+CONF_STANDBY_POWER: Final = "standby_power"
 
 DEFAULT_GRID_CHARGE_POWER: Final = 2500  # W drawn from the grid while charging
 DEFAULT_MAX_CHARGE_SOC: Final = 100  # % grid charging never goes above this
@@ -42,7 +43,24 @@ DEFAULT_EXPORT_PRICE: Final = 0.0  # ct per kWh fed into the grid
 DEFAULT_PV_FACTOR: Final = 1.0
 # Stored-and-returned share of the energy charged into the battery, used until
 # the integration has measured it.
-DEFAULT_EFFICIENCY: Final = 0.80
+DEFAULT_EFFICIENCY: Final = 0.78
+# W the storage system draws itself while the battery holds energy. Measured
+# on the author's device: 20-40 W; the plan assumes the upper end.
+DEFAULT_STANDBY_POWER: Final = 50
+# The schedule only leaves "standard" if that still pays with these
+# assumptions: less consumption to cover, more PV for free, a worse battery.
+CAUTION_LOAD: Final = 0.75
+CAUTION_PV: Final = 1.25
+CAUTION_EFFICIENCY: Final = 0.9
+# A plan must save at least this much (EUR) in every case it is tested on.
+PLAN_MIN_GAIN: Final = 0.05
+# The battery stops delivering at the reserve and its SoC reading recovers a
+# few percent afterwards. Up to this much above the reserve counts as empty.
+BATTERY_REST_MARGIN: Final = 5  # %
+# Highest charge and discharge power seen: held for this long, and only
+# trusted above PEAK_MIN_POWER.
+PEAK_WINDOW: Final = 60  # s
+PEAK_MIN_POWER: Final = 500  # W
 EFFICIENCY_MIN_SAMPLES: Final = 3
 # AC/DC conversion when charging from the grid, on top of the battery losses.
 GRID_CHARGE_AC_EFFICIENCY: Final = 0.95

@@ -80,6 +80,7 @@
           "grid_charge_power": "Netzladeleistung",
           "max_charge_soc": "Maximaler Ladezustand bei Netzladung",
           "efficiency": "Wirkungsgrad des Akkus (optional)",
+          "standby_power": "Standby-Verbrauch des Speichers",
           "shift_cost": "Mindestvorteil",
           "export_price": "Einspeisevergütung",
           "pv_auto_correct": "PV-Prognose automatisch korrigieren",
@@ -88,8 +89,9 @@
         "data_description": {
           "tibber_home": "Leer = das einzige Zuhause oder das, dessen Preis-Sensor im Energie-Dashboard eingetragen ist.",
           "plan_hold": "Der Akku darf für teurere Stunden aufgespart werden. Lädt die HyCube beim Halten aus dem Netz nach, lässt der Fahrplan den Modus 24 h lang weg.",
-          "grid_charge_power": "Leistung, mit der die HyCube aus dem Netz lädt.",
-          "efficiency": "Anteil der geladenen Energie, den der Akku wieder abgibt. Leer = von der Integration gemessener Wert (bis dahin 80 %).",
+          "grid_charge_power": "Gilt nur, bis die Integration die höchste Ladeleistung selbst gemessen hat.",
+          "efficiency": "Anteil der geladenen Energie, den der Akku wieder abgibt. Leer = von der Integration gemessener Wert (bis dahin 78 %).",
+          "standby_power": "Leistung, die der Speicher selbst zieht, solange der Akku Energie hält. Macht langes Aufsparen im Fahrplan teurer.",
           "shift_cost": "Netzladung und Halten werden nur eingeplant, wenn sie je kWh mehr als diesen Betrag sparen. Deckt Verschleiß und Prognosefehler ab.",
           "export_price": "Erlös je eingespeister kWh.",
           "pv_auto_correct": "Die Integration vergleicht Prognose und echte Erzeugung der letzten Wochen und korrigiert die Prognose je Tagesstunde.",
@@ -262,7 +264,7 @@
         "name": "Nächste Netzladung"
       },
       "plan_savings": {
-        "name": "Fahrplan erwartete Ersparnis"
+        "name": "Fahrplan Ersparnis (mindestens)"
       },
       "efficiency_estimate": {
         "name": "Wirkungsgrad (geschätzt)"
@@ -280,6 +282,9 @@
       },
       "pv_forecast_correction": {
         "name": "PV-Prognose Korrektur"
+      },
+      "plan_realized_savings": {
+        "name": "Fahrplan tatsächliche Ersparnis"
       }
     },
     "binary_sensor": {
