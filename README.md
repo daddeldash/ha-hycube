@@ -190,6 +190,10 @@ Drei Diagnose-Entitäten zeigen, was die Integration gelernt hat:
   `archive_oldest`, `archive_complete`), Grundlast (`base_load_kwh` pro Tag), Mehrverbrauch
   (`kwh_per_kelvin` pro Tag), Heizgrenze (`base_temperature`), Abweichung zum Wetterdienst
   (`weather_offset`) und die verwendeten Tagestemperaturen (`temperatures`).
+- **Verbrauchsmodell Genauigkeit**: wie genau das genutzte Modell den Tagesverbrauch trifft, in %
+  (100 % minus Fehler aus der Rückrechnung der letzten 21 Tage). Attribute: `model`,
+  `hourly_accuracy` (Treffgenauigkeit je Stunde), `all_models` (Genauigkeit aller Modelle),
+  `measured_accuracy` (aus den wirklich abgegebenen Prognosen der letzten 14 Tage, sobald vorhanden).
 - **Verbrauchsprognose Fehler**: wie weit die Prognose vom Tagesanfang in den letzten 14 Tagen vom
   echten Tagesverbrauch abwich, in %. Der Wert hat eine Langzeitstatistik, sodass du über Monate
   siehst, ob die Prognose besser wird.
@@ -352,7 +356,7 @@ Externe Erzeugung*, Hausverbrauch · Batterie gespeicherte Energie
 Ersparnis (mindestens), Fahrplan tatsächliche Ersparnis
 
 **Diagnose**: Batteriekapazität (geschätzt) · Wirkungsgrad (geschätzt) · Verbrauchsmodell ·
-Verbrauchsprognose Fehler · PV-Prognose Korrektur · Letzte Lückenfüllung (mit Lückenlänge, nachgetragener
+Verbrauchsmodell Genauigkeit · Verbrauchsprognose Fehler · PV-Prognose Korrektur · Letzte Lückenfüllung (mit Lückenlänge, nachgetragener
 Energie und nicht rekonstruierbarer Zeit als Attribute)
 
 **Binärsensoren**: Netzladung aktiv, Batterie-Zeitplan aktiv, Notstrom aktiviert, Notstrom Überlast

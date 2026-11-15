@@ -141,6 +141,11 @@ async def test_temperature_model_is_chosen_and_used(
     assert model.attributes["kwh_per_kelvin"] == pytest.approx(2.4, abs=0.1)
     assert model.attributes["base_load_kwh"] == pytest.approx(7.2, abs=0.3)
     assert model.attributes["archive_days"] == 60
+    accuracy = state(hass, "sensor", "consumption_model_accuracy")
+    assert float(accuracy.state) > 97
+    assert accuracy.attributes["model"] == "temperature"
+    assert accuracy.attributes["all_models"]["recent"] < 75
+    assert accuracy.attributes["measured_accuracy"] is None
 
     # Forecast of -3 deg C plus the 4 K the sensor reads above the service.
     assert forecaster.offset == pytest.approx(4.0)
