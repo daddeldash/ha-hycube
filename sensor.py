@@ -191,6 +191,7 @@ async def async_setup_entry(
         HyCubeEfficiencySensor(coordinator),
         HyCubeConsumptionModelSensor(coordinator),
         HyCubeForecastErrorSensor(coordinator),
+        HyCubeModelAccuracySensor(coordinator),
         HyCubePvCorrectionSensor(coordinator),
         HyCubeRealizedSavingsSensor(coordinator),
     ]
@@ -724,6 +725,51 @@ class HyCubeConsumptionModelSensor(HyCubeEntity, SensorEntity):
             "base_temperature": fit.base if fit else None,
             "weather_offset": None if forecaster.offset is None else round(forecaster.offset, 1),
             "temperatures": {day.isoformat(): t for day, t in forecaster.temperatures.items()},
+        }
+
+
+def _accuracy(share: float | None) -> float | None:
+    """100 % minus the error, never below 0."""
+    return None if share is None else round(max(1 - share, 0.0) * 100, 1)
+
+
+class HyCubeModelAccuracySensor(HyCubeEntity, SensorEntity):
+    """Diagnostics: how well the consumption model in use hits the daily consumption.
+
+    From the nightly backtest: the model predicted each of the last days
+    from the days before it. 100 % minus the share the daily totals were off.
+    """
+
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: HyCubeCoordinator) -> None:
+        super().__init__(coordinator, "consumption_model_accuracy")
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def native_value(self) -> float | None:
+        forecaster = self.coordinator.forecaster
+        test = forecaster.backtest
+        return _accuracy(test.daily.get(forecaster.kind)) if test else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        forecaster = self.coordinator.forecaster
+        test, error = forecaster.backtest, forecaster.error
+        return {
+            "model": forecaster.kind,
+            "hourly_accuracy": _accuracy(test.hourly.get(forecaster.kind)) if test else None,
+            "days": test.days if test else 0,
+            "all_models": {k: _accuracy(v) for k, v in test.daily.items()} if test else {},
+            # Of the forecasts really made, once there are some.
+            "measured_accuracy": _accuracy(error[0]) if error else None,
+            "measured_days": error[2] if error else 0,
         }
 
 

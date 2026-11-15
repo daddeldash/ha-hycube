@@ -285,6 +285,9 @@
       },
       "plan_realized_savings": {
         "name": "Fahrplan tatsächliche Ersparnis"
+      },
+      "consumption_model_accuracy": {
+        "name": "Verbrauchsmodell Genauigkeit"
       }
     },
     "binary_sensor": {
