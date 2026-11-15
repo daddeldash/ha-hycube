@@ -51,8 +51,9 @@
           "scan_interval": "Realtime poll interval",
           "status_interval": "Status poll interval",
           "battery_capacity": "Usable battery capacity",
-          "profile_weeks": "Weeks of history for the profile",
           "profile_source": "Profile source (optional)",
+          "temperature_entity": "Outdoor temperature sensor (optional)",
+          "weather_entity": "Weather forecast (optional)",
           "control_enabled": "Enable battery control",
           "cmd_standard": "Request for mode Standard",
           "cmd_hold": "Request for mode Hold",
@@ -61,7 +62,9 @@
         "data_description": {
           "scan_interval": "/get_values/ - power values. 10 s is a good balance.",
           "status_interval": "/data_row/ - status flags, changes rarely.",
-          "profile_source": "Energy sensor with history to build the profile from. Empty = this integration's home consumption.",
+          "profile_source": "Energy sensor with long-term statistics for the profile. Empty = archive of the HyCube's own daily statistics.",
+          "temperature_entity": "If consumption depends on the outdoor temperature (heat pump, heating), the consumption model learns that relation. The sensor needs long-term statistics.",
+          "weather_entity": "Provides the temperature of the coming days. Needed for the temperature model to be used.",
           "cmd_standard": "One request per line, sent in order. Default: stop grid charging and restore the battery split (85 % normal operation, 5 % buffer).",
           "cmd_grid_charge": "{soc} = grid charge target, {current_soc} = current SoC.",
           "cmd_hold": "Default: stop grid charging and shrink normal operation to {hold_active} (= 100 - current SoC, at least 10) so the reserve starts at the current SoC. Moved up while PV charges. Untested - see README."
@@ -79,7 +82,8 @@
           "efficiency": "Battery efficiency (optional)",
           "shift_cost": "Minimum gain",
           "export_price": "Feed-in tariff",
-          "pv_factor": "PV forecast correction factor"
+          "pv_auto_correct": "Correct the PV forecast automatically",
+          "pv_factor": "Additional PV forecast factor"
         },
         "data_description": {
           "tibber_home": "Empty = the only home, or the one whose price sensor the Energy dashboard uses.",
@@ -88,7 +92,8 @@
           "efficiency": "Share of the charged energy the battery gives back. Empty = the value measured by the integration (80 % until then).",
           "shift_cost": "Grid charging and holding are only planned if they save more than this per kWh. Covers wear and forecast errors.",
           "export_price": "Revenue per kWh fed into the grid.",
-          "pv_factor": "Multiplies the PV forecast, e.g. 0.9 if it is usually too high."
+          "pv_auto_correct": "The integration compares forecast and real production of the last weeks and corrects the forecast per hour of the day.",
+          "pv_factor": "Multiplies the PV forecast on top of the automatic correction. Normally 1."
         }
       }
     }
@@ -261,6 +266,20 @@
       },
       "efficiency_estimate": {
         "name": "Battery efficiency (estimated)"
+      },
+      "consumption_model": {
+        "name": "Consumption model",
+        "state": {
+          "recent": "Recent weeks",
+          "seasonal": "Season",
+          "temperature": "Outdoor temperature"
+        }
+      },
+      "consumption_forecast_error": {
+        "name": "Consumption forecast error"
+      },
+      "pv_forecast_correction": {
+        "name": "PV forecast correction"
       }
     },
     "binary_sensor": {

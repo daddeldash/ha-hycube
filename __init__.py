@@ -7,15 +7,18 @@ import logging
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
 
 from .api import HyCubeApi
 from .const import (
     CONF_CMD_GRID_CHARGE,
     CONF_CMD_STANDARD,
+    DOMAIN,
     LEGACY_CMD_GRID_CHARGE,
     LEGACY_CMD_STANDARD,
+    STORAGE_VERSION,
 )
-from .coordinator import HyCubeConfigEntry, HyCubeCoordinator
+from .coordinator import HyCubeConfigEntry, HyCubeCoordinator, archive_store_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,3 +79,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: HyCubeConfigEntry) -> b
         # coordinator must not overwrite the store after a reload.
         await entry.runtime_data.async_shutdown()
     return unloaded
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: HyCubeConfigEntry) -> None:
+    """Delete the stored totals and the archive with the entry."""
+    for key in (f"{DOMAIN}.{entry.entry_id}", archive_store_key(entry.entry_id)):
+        await Store(hass, STORAGE_VERSION, key).async_remove()

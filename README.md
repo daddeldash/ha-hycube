@@ -18,9 +18,11 @@ direkt im lokalen Netz über die *CubeConnect*-API der HyWeb-Oberfläche aus, ga
   externe Erzeugung und Hausverbrauch. Die Zähler bleiben über Neustarts erhalten.
 - **Lückenfüllung**: Fällt die Verbindung aus, holt die Integration die fehlende Energie aus den
   5-Minuten-Statistiken der HyCube nach (bis zu 7 Tage zurück), statt sie zu verlieren oder zu schätzen.
-- **Verbrauchsprofil und Prognose**: Aus den letzten Wochen entsteht ein Wochentag-×-Stunde-Profil
-  (neuere Wochen zählen stärker). Daraus folgen Prognosen für die nächste Stunde, den Rest des Tages,
-  die nächsten 24 h und morgen sowie eine Schätzung, **wann der Akku ohne PV leer wäre**.
+- **Lernende Verbrauchsprognose**: Die Integration archiviert Verbrauch und PV-Erzeugung dauerhaft und
+  lernt daraus, wie der Verbrauch von Wochentag, Uhrzeit, Jahreszeit und Außentemperatur abhängt. Sie
+  prüft ihre Modelle an der eigenen Historie und nutzt das mit dem kleinsten Fehler. Daraus folgen
+  Prognosen für die nächste Stunde, den Rest des Tages, die nächsten 24 h und morgen sowie eine
+  Schätzung, **wann der Akku ohne PV leer wäre**.
 - **Kostenoptimierter Fahrplan**: Aus Verbrauchsprofil, PV-Prognose und Tibber-Preisen für heute und
   morgen berechnet die Integration, wann die PV das Haus versorgt, wann der Akku, wann das Netz und
   wann sich Laden aus dem Netz lohnt. Auf Wunsch schaltet sie den Batteriemodus selbst.
@@ -76,8 +78,9 @@ Erreichbar über **Geräte & Dienste → HyCube → Konfigurieren**. Der Dialog 
 | Abfrageintervall Echtzeitwerte | 10 s | Wie oft `/get_values/` abgefragt wird (min. 5 s). Kürzere Intervalle machen die Energiezähler genauer, belasten aber den Controller. |
 | Abfrageintervall Status | 60 s | Wie oft die Statusflags (`/data_row/`) gelesen werden. |
 | Nutzbare Batteriekapazität | 10 kWh | Energie pro 100 % Ladezustand, für „gespeicherte Energie“ und die Prognose „Batterie leer“. Die Diagnose-Entität **Batteriekapazität (geschätzt)** zeigt, was der Akku beim Entladen tatsächlich liefert (erster Wert nach mindestens 20 % Entladung ohne Laden, z. B. abends); trage diesen Wert hier ein. |
-| Wochen Historie für das Profil | 8 | Zeitraum, aus dem das Verbrauchsprofil gebaut wird. |
-| Profil-Quelle | leer | Optional ein beliebiger Energie-Sensor mit Langzeitstatistik. Leer = Tagesstatistik der HyCube (Fallback: Hausverbrauch-Zähler dieser Integration). |
+| Profil-Quelle | leer | Optional ein beliebiger Energie-Sensor mit Langzeitstatistik. Leer = Archiv aus der Tagesstatistik der HyCube (Fallback: Hausverbrauch-Zähler dieser Integration). |
+| Außentemperatur-Sensor | leer | Hängt der Verbrauch an der Außentemperatur (Wärmepumpe, Heizung), lernt das Verbrauchsmodell diesen Zusammenhang. Der Sensor braucht eine Langzeitstatistik. |
+| Wettervorhersage | leer | Wetter-Entität, die die Temperatur der kommenden Tage liefert. Erst mit Sensor und Wettervorhersage wird das Temperaturmodell genutzt. |
 | Batteriesteuerung aktivieren | an | Ist sie aus, lehnt die Integration jede Modusänderung ab und liest nur noch. |
 | Request für Modus … | siehe unten | Welche HTTP-Requests ein Modus auslöst. |
 
@@ -93,7 +96,8 @@ Erreichbar über **Geräte & Dienste → HyCube → Konfigurieren**. Der Dialog 
 | Wirkungsgrad des Akkus | leer | Anteil der geladenen Energie, den der Akku wieder abgibt. Leer = der gemessene Wert der Diagnose-Entität **Wirkungsgrad (geschätzt)**, bis dahin 80 %. |
 | Mindestvorteil | 1 ct/kWh | Netzladung und Halten werden nur eingeplant, wenn sie je kWh mehr als diesen Betrag sparen. Deckt Verschleiß und Prognosefehler ab. |
 | Einspeisevergütung | 0 ct/kWh | Erlös je eingespeister kWh. |
-| Korrekturfaktor PV-Prognose | 1,0 | Multipliziert die PV-Prognose, z. B. 0,9, wenn sie meist zu hoch liegt. |
+| PV-Prognose automatisch korrigieren | an | Die Integration vergleicht Prognose und echte Erzeugung der letzten Wochen und korrigiert die Prognose je Tagesstunde. |
+| Zusätzlicher Faktor PV-Prognose | 1,0 | Multipliziert die PV-Prognose zusätzlich zur automatischen Korrektur. Normalerweise 1. |
 
 ## Batteriemodi
 
@@ -141,15 +145,55 @@ Die Zähler laufen ab der Einrichtung. Die Integration selbst hat keine Vergange
 
 ## Verbrauchsprognose
 
-Das Profil wird täglich um 00:10 Uhr und beim Start neu berechnet, auf Wunsch auch über den Button
-**Verbrauchsprofil neu berechnen**. Die Prognose-Sensoren sind verfügbar, sobald mindestens ein voller
-Tag an Daten vorliegt.
+### Archiv
 
-Der Sensor **Verbrauchsprognose 24 h** hat zusätzlich diese Attribute:
+Die Integration speichert den Verbrauch und die PV-Erzeugung jedes Tages stundenweise und dauerhaft,
+dazu das Tagesmittel der Außentemperatur. Quelle ist die Tagesstatistik der HyCube. Jede Nacht kommt
+der Vortag hinzu; außerdem holt die Integration pro Lauf bis zu 30 ältere Tage nach, bis die HyCube
+14 Tage in Folge nichts mehr liefert. So wächst das Archiv auch in die Vergangenheit, ohne den
+Controller zu belasten. Je länger das Archiv reicht, desto mehr Muster kann die Prognose nutzen.
+
+### Modelle
+
+Drei Arten von Modell sagen den Verbrauch je Stunde voraus:
+
+| Modell | Muster | Sinnvoll ab |
+| --- | --- | --- |
+| *Letzte Wochen* | Wochentag × Stunde, neuere Wochen zählen stärker. | wenigen Tagen |
+| *Jahreszeit* | Wie oben, aber Tage derselben Jahreszeit zählen voll, auch aus den Vorjahren. | etwa einem Jahr |
+| *Außentemperatur* | Je Stunde: Grundlast plus Mehrverbrauch je Grad unter einer Heizgrenze, dazu der Einfluss des Wochentags. Gilt auch für Kälte, die im Archiv noch nicht vorkam. | 21 Tagen mit mindestens 5 K Temperaturspanne |
+
+Für das Temperaturmodell trägst du in den Optionen einen Außentemperatur-Sensor und eine
+Wetter-Entität ein. Die Wettervorhersage weicht oft vom eigenen Sensor ab (Hauswand, Höhenlage); die
+Integration misst diese Abweichung laufend und rechnet sie in die Vorhersage ein.
+
+Welches Modell gilt, entscheidet eine Rückrechnung: Jedes Modell sagt jeden der letzten 21 Tage nur
+aus den Daten davor voraus. Das Modell mit dem kleinsten Fehler wird genutzt; gewechselt wird erst bei
+einem klaren Vorsprung. Das geschieht täglich um 00:10 Uhr und beim Start, auf Wunsch auch über den
+Button **Verbrauchsprofil neu berechnen**. Die Prognose selbst wird stündlich mit der aktuellen
+Wettervorhersage erneuert.
+
+### Sensoren
+
+Die Prognose-Sensoren sind verfügbar, sobald mindestens ein voller Tag an Daten vorliegt. Der Sensor
+**Verbrauchsprognose 24 h** hat zusätzlich diese Attribute:
 
 - `hourly`: Liste `[{start, kwh}]` für die nächsten 24 vollen Stunden, z. B. für ApexCharts
-- `profile_today`: 24 Stundenwerte des heutigen Wochentags
-- `profile_days_of_data`, `profile_built`, `profile_source`
+- `profile_today`: 24 Stundenwerte für heute
+- `model`, `profile_days_of_data`, `profile_built`, `profile_source`
+
+Drei Diagnose-Entitäten zeigen, was die Integration gelernt hat:
+
+- **Verbrauchsmodell**: das genutzte Modell. Attribute: Fehler jedes Modells in der Rückrechnung
+  (`backtest_daily_error`, `backtest_hourly_error` in %), Umfang des Archivs (`archive_days`,
+  `archive_oldest`, `archive_complete`), Grundlast (`base_load_kwh` pro Tag), Mehrverbrauch
+  (`kwh_per_kelvin` pro Tag), Heizgrenze (`base_temperature`), Abweichung zum Wetterdienst
+  (`weather_offset`) und die verwendeten Tagestemperaturen (`temperatures`).
+- **Verbrauchsprognose Fehler**: wie weit die Prognose vom Tagesanfang in den letzten 14 Tagen vom
+  echten Tagesverbrauch abwich, in %. Der Wert hat eine Langzeitstatistik, sodass du über Monate
+  siehst, ob die Prognose besser wird.
+- **PV-Prognose Korrektur**: gelernter Faktor zwischen echter und vorhergesagter PV-Erzeugung, mit
+  den Faktoren je Tagesstunde als Attribut.
 
 **Batterie leer (Prognose, ohne PV)** rechnet den nutzbaren Inhalt gegen das Profil und gibt den
 Zeitpunkt zurück, an dem der Akku ohne PV-Ertrag nichts mehr ans Haus abgibt (bis 48 h voraus).
@@ -171,8 +215,11 @@ Eingangsdaten:
 - **Preise**: Tibber, heute und (ab etwa 13 Uhr) morgen, über die Aktion `tibber.get_prices`.
   Die Tibber-Integration muss eingerichtet sein.
 - **PV-Prognose**: die Prognose, die im Energie-Dashboard bei der Solarproduktion eingetragen ist
-  (z. B. Forecast.Solar). Ohne Prognose rechnet der Fahrplan ohne PV-Ertrag.
-- **Verbrauch**: das Verbrauchsprofil dieser Integration.
+  (z. B. Forecast.Solar). Ohne Prognose rechnet der Fahrplan ohne PV-Ertrag. Die Integration merkt
+  sich die Prognose jedes Tages, vergleicht sie mit der echten Erzeugung und korrigiert künftige
+  Prognosen je Tagesstunde, sobald mindestens 5 Tage vorliegen. Das gleicht Verschattung, Schmutz und
+  eine ungenaue Ausrichtung aus.
+- **Verbrauch**: die [Verbrauchsprognose](#verbrauchsprognose) dieser Integration.
 - **Akku**: aktueller Ladezustand, Reserve-Grenze, gemessene Kapazität und gemessener Wirkungsgrad.
 
 Der Fahrplan wird jede Viertelstunde neu berechnet, immer ab dem tatsächlichen Ladezustand. Je
@@ -260,7 +307,8 @@ Externe Erzeugung*, Hausverbrauch · Batterie gespeicherte Energie
 **Sensoren (Fahrplan)**: Fahrplan Quelle, Fahrplan Batteriemodus, Nächste Netzladung, Fahrplan
 erwartete Ersparnis
 
-**Diagnose**: Batteriekapazität (geschätzt) · Wirkungsgrad (geschätzt) · Letzte Lückenfüllung (mit Lückenlänge, nachgetragener
+**Diagnose**: Batteriekapazität (geschätzt) · Wirkungsgrad (geschätzt) · Verbrauchsmodell ·
+Verbrauchsprognose Fehler · PV-Prognose Korrektur · Letzte Lückenfüllung (mit Lückenlänge, nachgetragener
 Energie und nicht rekonstruierbarer Zeit als Attribute)
 
 **Binärsensoren**: Netzladung aktiv, Batterie-Zeitplan aktiv, Notstrom aktiviert, Notstrom Überlast
@@ -308,9 +356,9 @@ Verwendete Endpunkte der HyCube:
 
 ## Entwicklung
 
-Die Rechenlogik (`energy.py`, `profile.py`, `optimizer.py`) kommt ohne Home Assistant aus und wird mit
-der Standardbibliothek getestet. `-P` verhindert, dass Module des Repositorys (`select.py`,
-`profile.py`) Module der Standardbibliothek verdecken:
+Die Rechenlogik (`energy.py`, `profile.py`, `archive.py`, `model.py`, `solar.py`, `optimizer.py`)
+kommt ohne Home Assistant aus und wird mit der Standardbibliothek getestet. `-P` verhindert, dass
+Module des Repositorys (`select.py`, `profile.py`) Module der Standardbibliothek verdecken:
 
 ```bash
 python3 -P -m unittest discover -s tests

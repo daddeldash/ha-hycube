@@ -23,18 +23,18 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import HyCubeApi, HyCubeAuthError, HyCubeBusyError, HyCubeError
+from .archive import Archive
 from .const import (
+    ARCHIVE_DAYS_PER_RUN,
     BATTERY_ACTIVE_DEFAULT,
     BATTERY_PROTECTION,
     BUSY_BACKOFF,
     CONF_BATTERY_CAPACITY,
     CONF_CONTROL_ENABLED,
     CONF_PROFILE_SOURCE,
-    CONF_PROFILE_WEEKS,
     CONF_SCAN_INTERVAL,
     CONF_STATUS_INTERVAL,
     DEFAULT_BATTERY_CAPACITY,
-    DEFAULT_PROFILE_WEEKS,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_STATUS_INTERVAL,
     DEFAULT_TARGET_SOC,
@@ -43,6 +43,7 @@ from .const import (
     ENERGY_BATTERY_CHARGE,
     ENERGY_BATTERY_DISCHARGE,
     ENERGY_HOME,
+    ENERGY_SOLAR,
     GAP_BACKFILL_FACTOR,
     GAP_MAX_INTERPOLATE,
     GAP_MIN_BACKFILL,
@@ -76,6 +77,7 @@ from .energy import (
     round_trip_efficiency,
     to_float,
 )
+from .forecaster import RECORDER_YEARS, ConsumptionForecaster
 from .planner import HyCubePlanner
 from .profile import ConsumptionProfile
 
@@ -133,8 +135,10 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         # Energy the battery takes per 100 % SoC; with `capacity` the efficiency.
         self.charge_capacity = CapacityEstimator(rising=True)
         self.planner = HyCubePlanner(hass, self)
-        # Hourly household kWh per past day from the device's own statistics.
-        self.history: dict[str, list[float | None] | None] = {}
+        self.forecaster = ConsumptionForecaster(hass, self)
+        # Hourly consumption and PV production of all past days, kept for good.
+        self.archive = Archive()
+        self._rebuild_lock = asyncio.Lock()
         self._status_interval = entry.options.get(
             CONF_STATUS_INTERVAL, DEFAULT_STATUS_INTERVAL
         )
@@ -156,6 +160,11 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
         )
+        # The archive grows large and changes once a day, so it has a store of
+        # its own instead of being rewritten with the totals every 30 s.
+        self._archive_store: Store[dict[str, Any]] = Store(
+            hass, STORAGE_VERSION, archive_store_key(entry.entry_id)
+        )
 
     # --- lifecycle --------------------------------------------------------------
     async def _async_setup(self) -> None:
@@ -169,7 +178,12 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         self.target_soc = int(stored.get("target_soc", DEFAULT_TARGET_SOC))
         self.hold_active = stored.get("hold_active")
         self.profile = ConsumptionProfile.from_dict(stored.get("profile"))
-        self.history = stored.get("history") or {}
+        self.forecaster.restore(stored.get("forecaster"))
+        if (archived := await self._archive_store.async_load()) is not None:
+            self.archive = Archive(archived)
+        else:
+            # Versions before 1.2 kept the last weeks in the main store.
+            self.archive = Archive.from_legacy(stored.get("history"))
         self.last_backfill = stored.get("last_backfill") or {}
         self.capacity = CapacityEstimator(stored.get("capacity"))
         self.charge_capacity = CapacityEstimator(
@@ -187,6 +201,7 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
     def start_profile_schedule(self) -> None:
         """Rebuild the profile daily and shortly after start; start planning."""
         self.planner.start()
+        self.forecaster.start()
         self.config_entry.async_on_unload(
             async_track_time_change(
                 self.hass, self._scheduled_profile_rebuild, hour=0, minute=10, second=0
@@ -202,6 +217,7 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
     async def async_shutdown(self) -> None:
         """Persist totals immediately on unload/stop."""
         await self._store.async_save(self._store_data())
+        await self.async_save_archive()
         await super().async_shutdown()
 
     @callback
@@ -214,7 +230,7 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
             "target_soc": self.target_soc,
             "hold_active": self.hold_active,
             "profile": self.profile.as_dict(),
-            "history": self.history,
+            "forecaster": self.forecaster.as_dict(),
             "last_backfill": self.last_backfill,
             "capacity": self.capacity.as_dict(),
             "charge_capacity": self.charge_capacity.as_dict(),
@@ -229,6 +245,12 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
     def async_schedule_save(self) -> None:
         """Persist the stored state soon (for the planner and entities)."""
         self._schedule_save()
+
+    async def async_save_archive(self) -> None:
+        """Write the archive if it changed."""
+        if self.archive.dirty:
+            self.archive.dirty = False
+            await self._archive_store.async_save(self.archive.as_dict())
 
     # --- polling ----------------------------------------------------------------
     async def _async_update_data(self) -> HyCubeData:
@@ -597,23 +619,17 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         """Where the profile comes from: an entity id or 'device'."""
         return self.config_entry.options.get(CONF_PROFILE_SOURCE) or "device"
 
-    def _weeks(self) -> int:
-        return int(self.config_entry.options.get(CONF_PROFILE_WEEKS, DEFAULT_PROFILE_WEEKS))
-
     async def _sync_device_history(self) -> None:
-        """Fetch hourly household consumption of past days from /db_today/.
+        """Add past days from /db_today/ to the archive.
 
-        Past days never change, so each day is fetched once and cached in the
-        store. Requests are spaced out to keep the load on the controller low.
+        Past days never change, so each day is fetched once. Missing recent
+        days come first, then the archive grows further into the past, a few
+        days per run with pauses in between to keep the load on the
+        controller low, until the device has nothing older.
         """
         tz = dt_util.get_default_time_zone()
-        today = dt_util.now().date()
-        wanted = [today - timedelta(days=d) for d in range(1, self._weeks() * 7 + 1)]
-        self.history = {k: v for k, v in self.history.items() if date.fromisoformat(k) in wanted}
         fetched = 0
-        for day in wanted:
-            if day.isoformat() in self.history:
-                continue
+        for day in self.archive.pending(dt_util.now().date(), ARCHIVE_DAYS_PER_RUN):
             if fetched:
                 await asyncio.sleep(HISTORY_REQUEST_SPACING)
             try:
@@ -622,35 +638,20 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
                 _LOGGER.debug("HyCube history for %s not loaded: %s", day, err)
                 break  # try the rest on the next rebuild
             fetched += 1
-            hours = hourly_kwh(buckets_from_day_stats(stats, day, tz), ENERGY_HOME, tz)
-            if not hours:
-                self.history[day.isoformat()] = None  # no data on the device
-                continue
-            by_hour = {start.hour: kwh for start, kwh in hours.items()}
-            self.history[day.isoformat()] = [
-                round(by_hour[h], 4) if h in by_hour else None for h in range(24)
-            ]
+            buckets = buckets_from_day_stats(stats, day, tz)
+            self.archive.set_energy(
+                day,
+                _day_hours(buckets, ENERGY_HOME, day, tz),
+                _day_hours(buckets, ENERGY_SOLAR, day, tz),
+            )
         if fetched:
-            _LOGGER.debug("HyCube loaded %s days of device history", fetched)
-            self._schedule_save()
-
-    def _device_history_rows(self) -> list[tuple[datetime, float]]:
-        tz = dt_util.get_default_time_zone()
-        rows = []
-        for day_iso, hours in self.history.items():
-            if not hours:
-                continue
-            start = datetime.combine(date.fromisoformat(day_iso), datetime.min.time(), tzinfo=tz)
-            rows += [
-                (start + timedelta(hours=h), kwh)
-                for h, kwh in enumerate(hours)
-                if kwh is not None
-            ]
-        return rows
+            self.archive.check_complete()
+            _LOGGER.debug("HyCube added %s days to the archive", fetched)
+            await self.async_save_archive()
 
     async def _recorder_rows(self, stat_id: str) -> list[tuple[datetime, float]]:
         end = dt_util.start_of_local_day()
-        start = end - timedelta(weeks=self._weeks())
+        start = end - timedelta(days=RECORDER_YEARS * 366)
         stats = await get_instance(self.hass).async_add_executor_job(
             statistics_during_period,
             self.hass,
@@ -673,21 +674,42 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         return rows
 
     async def async_rebuild_profile(self) -> None:
-        """Rebuild the profile from device history or recorder statistics."""
-        source = self.profile_source()
-        if source == "device":
+        """Bring the archive up to date and learn the consumption from it."""
+        async with self._rebuild_lock:
+            source = self.profile_source()
+            # The archive is filled in any case: it also holds the PV production.
             await self._sync_device_history()
-            rows = self._device_history_rows()
-            if not rows:
-                # Device keeps no history: fall back to this integration's sensor.
-                own = er.async_get(self.hass).async_get_entity_id(
-                    "sensor", DOMAIN, f"{self.config_entry.unique_id}_energy_{ENERGY_HOME}"
-                )
-                rows = await self._recorder_rows(own) if own else []
-        else:
-            rows = await self._recorder_rows(source)
-        self.profile = ConsumptionProfile.build(rows, dt_util.now())
-        _LOGGER.debug("HyCube profile rebuilt from %s (%s hours)", source, len(rows))
-        self._schedule_save()
-        self.async_update_listeners()
-        self.planner.schedule_update()
+            if source == "device":
+                rows = self.archive.rows(dt_util.get_default_time_zone())
+                if not rows:
+                    # Device keeps no history: fall back to this integration's sensor.
+                    own = er.async_get(self.hass).async_get_entity_id(
+                        "sensor", DOMAIN, f"{self.config_entry.unique_id}_energy_{ENERGY_HOME}"
+                    )
+                    rows = await self._recorder_rows(own) if own else []
+            else:
+                rows = await self._recorder_rows(source)
+            profile = ConsumptionProfile.build(rows, dt_util.now())
+            profile.hours = self.profile.hours  # stays until the forecast is refreshed
+            self.profile = profile
+            _LOGGER.debug("HyCube profile rebuilt from %s (%s hours)", source, len(rows))
+            self._schedule_save()
+            self.async_update_listeners()
+            await self.forecaster.async_rebuild(rows)
+
+
+def archive_store_key(entry_id: str) -> str:
+    """Name of the archive's store file."""
+    return f"{DOMAIN}.{entry_id}.history"
+
+
+def _day_hours(
+    buckets: list[Any], key: str, day: date, tz: Any
+) -> list[float | None] | None:
+    """24 hourly kWh of one flow on one day; None without data."""
+    by_hour = {
+        start.hour: kwh
+        for start, kwh in hourly_kwh(buckets, key, tz).items()
+        if start.date() == day
+    }
+    return [by_hour.get(h) for h in range(24)] if by_hour else None

@@ -43,6 +43,7 @@ from .const import (
 from .coordinator import HyCubeConfigEntry, HyCubeCoordinator
 from .energy import to_float
 from .entity import HyCubeEntity
+from .model import KINDS
 
 PARALLEL_UPDATES = 0
 
@@ -187,6 +188,9 @@ async def async_setup_entry(
         HyCubeNextGridChargeSensor(coordinator),
         HyCubePlanSavingsSensor(coordinator),
         HyCubeEfficiencySensor(coordinator),
+        HyCubeConsumptionModelSensor(coordinator),
+        HyCubeForecastErrorSensor(coordinator),
+        HyCubePvCorrectionSensor(coordinator),
     ]
     async_add_entities(entities)
 
@@ -390,9 +394,14 @@ class HyCubeForecastSensor(HyCubeEntity, SensorEntity):
             return None
         profile = self.coordinator.profile
         now = dt_util.now()
+        today = dt_util.start_of_local_day(now)
         return {
             "hourly": profile.hourly_forecast(now, 24),
-            "profile_today": profile.day_profile(now.weekday()),
+            "profile_today": [
+                round(profile.expected(today + timedelta(hours=h)) or 0.0, 3)
+                for h in range(24)
+            ],
+            "model": self.coordinator.forecaster.kind,
             "profile_days_of_data": round(profile.days_of_data, 1),
             "profile_built": profile.built.isoformat() if profile.built else None,
             "profile_source": self.coordinator.profile_source(),
@@ -623,4 +632,105 @@ class HyCubeEfficiencySensor(HyCubeEntity, SensorEntity):
             "used_for_schedule": round(
                 self.coordinator.planner.battery_model().charge_eff * 100, 1
             ),
+        }
+
+
+def _percent(share: float | None) -> float | None:
+    return None if share is None else round(share * 100, 1)
+
+
+class HyCubeConsumptionModelSensor(HyCubeEntity, SensorEntity):
+    """Diagnostics: kind of model the consumption forecast uses, and why."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = KINDS
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: HyCubeCoordinator) -> None:
+        super().__init__(coordinator, "consumption_model")
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.forecaster.kind
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        forecaster = self.coordinator.forecaster
+        archive = self.coordinator.archive
+        test, fit = forecaster.backtest, forecaster.fit
+        oldest = archive.oldest()
+        return {
+            "backtest_hourly_error": {k: _percent(v) for k, v in test.hourly.items()} if test else {},
+            "backtest_daily_error": {k: _percent(v) for k, v in test.daily.items()} if test else {},
+            "backtest_days": test.days if test else 0,
+            "archive_days": archive.count(),
+            "archive_oldest": oldest.isoformat() if oldest else None,
+            "archive_complete": archive.complete,
+            "base_load_kwh": round(fit.daily_base, 1) if fit else None,
+            "kwh_per_kelvin": round(fit.daily_slope, 2) if fit else None,
+            "base_temperature": fit.base if fit else None,
+            "weather_offset": None if forecaster.offset is None else round(forecaster.offset, 1),
+            "temperatures": {day.isoformat(): t for day, t in forecaster.temperatures.items()},
+        }
+
+
+class HyCubeForecastErrorSensor(HyCubeEntity, SensorEntity):
+    """Diagnostics: how far the consumption forecast was off over the last days."""
+
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: HyCubeCoordinator) -> None:
+        super().__init__(coordinator, "consumption_forecast_error")
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def native_value(self) -> float | None:
+        error = self.coordinator.forecaster.error
+        return _percent(error[0]) if error else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        error = self.coordinator.forecaster.error
+        return {
+            "hourly_error": _percent(error[1]) if error else None,
+            "days": error[2] if error else 0,
+        }
+
+
+class HyCubePvCorrectionSensor(HyCubeEntity, SensorEntity):
+    """Diagnostics: learned factor between real and forecast PV production."""
+
+    _attr_suggested_display_precision = 2
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: HyCubeCoordinator) -> None:
+        super().__init__(coordinator, "pv_forecast_correction")
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def native_value(self) -> float | None:
+        correction = self.coordinator.forecaster.pv
+        return correction.overall if correction else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        correction = self.coordinator.forecaster.pv
+        return {
+            "hourly": list(correction.hourly) if correction else None,
+            "days": correction.days if correction else 0,
+            "used_for_schedule": self.coordinator.planner.pv_correction() is not None,
         }

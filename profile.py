@@ -4,6 +4,9 @@ The profile is a weekday x hour matrix of the average household consumption
 in kWh, built from the hourly long-term statistics of the home energy sensor.
 Recent weeks weigh more (exponential decay) so the profile follows seasons.
 Slots without enough data fall back to the all-days average of that hour.
+
+On top of the matrix the profile carries the forecast of the consumption
+model for the coming days (`hours`); where it has a value, that one is used.
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 HALF_LIFE_DAYS = 14.0
 MIN_WEIGHT = 0.5  # below this summed weight a weekday slot uses the hour fallback
@@ -25,6 +28,13 @@ class ConsumptionProfile:
     hourly: dict[int, float] = field(default_factory=dict)
     days_of_data: float = 0.0
     built: datetime | None = None
+    # Forecast of the consumption model: hour_key() -> kWh
+    hours: dict[str, float] = field(default_factory=dict)
+
+    @staticmethod
+    def hour_key(day: date, hour: int) -> str:
+        """Key of `hours` for an hour of a local day."""
+        return f"{day.isoformat()}T{hour:02d}"
 
     @classmethod
     def build(
@@ -54,7 +64,9 @@ class ConsumptionProfile:
 
     def expected(self, start: datetime) -> float | None:
         """Expected kWh for the hour starting at `start` (local time)."""
-        val = self.slots.get((start.weekday(), start.hour))
+        val = self.hours.get(self.hour_key(start.date(), start.hour))
+        if val is None:
+            val = self.slots.get((start.weekday(), start.hour))
         if val is None:
             val = self.hourly.get(start.hour)
         return val
@@ -99,6 +111,7 @@ class ConsumptionProfile:
             "hourly": {str(h): v for h, v in self.hourly.items()},
             "days_of_data": self.days_of_data,
             "built": self.built.isoformat() if self.built else None,
+            "hours": self.hours,
         }
 
     @classmethod
@@ -116,4 +129,5 @@ class ConsumptionProfile:
             hourly={int(h): float(v) for h, v in data.get("hourly", {}).items()},
             days_of_data=float(data.get("days_of_data", 0)),
             built=datetime.fromisoformat(built) if built else None,
+            hours={str(k): float(v) for k, v in (data.get("hours") or {}).items()},
         )

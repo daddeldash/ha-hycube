@@ -19,6 +19,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
 
+from .archive import PV_FORECAST
 from .const import (
     CONF_CONTROL_ENABLED,
     CONF_EFFICIENCY,
@@ -27,6 +28,7 @@ from .const import (
     CONF_MAX_CHARGE_SOC,
     CONF_PLAN_GRID_CHARGE,
     CONF_PLAN_HOLD,
+    CONF_PV_AUTO_CORRECT,
     CONF_PV_FACTOR,
     CONF_SHIFT_COST,
     CONF_TIBBER_HOME,
@@ -176,6 +178,8 @@ class HyCubePlanner:
         await self._refresh_prices()
         pv = await self._pv_periods()
         now = dt_util.now()
+        if pv is not None:
+            await self._remember_pv_forecast(pv)
         slots = self._slots(now, pv)
         if not slots:
             self.plan, self.error = None, "no_prices"
@@ -283,6 +287,31 @@ class HyCubePlanner:
             return None
         return periods if found else None
 
+    async def _remember_pv_forecast(self, pv: list[PvPeriod]) -> None:
+        """Keep today's forecast, as it stands early in the day, to compare it
+        with the real production later."""
+        coordinator = self.coordinator
+        start = dt_util.start_of_local_day()
+        hours = []
+        for hour in range(24):
+            begin = (start + timedelta(hours=hour)).timestamp()
+            hours.append(
+                sum(
+                    wh * max(min(begin + 3600, p_end) - max(begin, p_start), 0.0) / (p_end - p_start)
+                    for p_start, p_end, wh in pv
+                    if p_end > p_start
+                )
+                / 1000
+            )
+        if coordinator.archive.set_snapshot(start.date(), PV_FORECAST, hours):
+            await coordinator.async_save_archive()
+
+    def pv_correction(self) -> Any:
+        """Learned correction of the PV forecast, None if unknown or switched off."""
+        if not self._options.get(CONF_PV_AUTO_CORRECT, True):
+            return None
+        return self.coordinator.forecaster.pv
+
     def _slots(self, now: datetime, pv: list[PvPeriod] | None) -> list[Slot]:
         """Slots from now to the end of the known prices."""
         prices = self._prices
@@ -292,6 +321,7 @@ class HyCubePlanner:
         last = prices[-1][0] - prices[-2][0] if len(prices) > 1 else 3600.0
         end = prices[-1][0] + min(max(last, _SLOT_SECONDS), 3600.0)
         factor = float(self._options.get(CONF_PV_FACTOR, DEFAULT_PV_FACTOR))
+        correction = self.pv_correction()
         profile = self.coordinator.profile
         current = now.timestamp()
         slot_start = current - current % _SLOT_SECONDS
@@ -320,7 +350,10 @@ class HyCubePlanner:
                     hours=hours,
                     price=prices[index][1],
                     load=(profile.expected(hour) or 0.0) * hours,
-                    pv=produced * factor / 1000,
+                    pv=produced
+                    * factor
+                    * (correction.factor(hour.hour) if correction else 1.0)
+                    / 1000,
                 )
             )
         return slots

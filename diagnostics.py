@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import CONF_TIBBER_HOME
 from .coordinator import HyCubeConfigEntry
+from .forecaster import ConsumptionForecaster
 from .planner import HyCubePlanner
 
 # The Tibber home is named after its address.
@@ -39,13 +40,30 @@ async def async_get_config_entry_diagnostics(
         "last_backfill": c.last_backfill,
         "capacity_estimate": c.capacity.as_dict(),
         "discharge_floor": c.discharge_floor(),
-        "history_days": len([v for v in c.history.values() if v]),
+        "archive": {
+            "days": c.archive.count(),
+            "oldest": c.archive.oldest(),
+            "complete": c.archive.complete,
+        },
+        "consumption_model": _model(c.forecaster),
         "mode": c.mode,
         "target_soc": c.target_soc,
         "profile": c.profile.as_dict(),
         "charge_capacity_estimate": c.charge_capacity.as_dict(),
         "efficiency": c.efficiency(),
         "schedule": _schedule(c.planner),
+    }
+
+
+def _model(forecaster: ConsumptionForecaster) -> dict[str, Any]:
+    return {
+        "kind": forecaster.kind,
+        "backtest": asdict(forecaster.backtest) if forecaster.backtest else None,
+        "temperature_fit": asdict(forecaster.fit) if forecaster.fit else None,
+        "weather_offset": forecaster.offset,
+        "temperatures": {day.isoformat(): t for day, t in forecaster.temperatures.items()},
+        "measured_error": forecaster.error,
+        "pv_correction": asdict(forecaster.pv) if forecaster.pv else None,
     }
 
 
