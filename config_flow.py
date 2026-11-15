@@ -28,11 +28,14 @@ from .const import (
     CONF_PLAN_HOLD,
     CONF_PROFILE_SOURCE,
     CONF_PROFILE_WEEKS,
+    CONF_PV_AUTO_CORRECT,
     CONF_PV_FACTOR,
     CONF_SCAN_INTERVAL,
     CONF_SHIFT_COST,
     CONF_STATUS_INTERVAL,
+    CONF_TEMPERATURE_ENTITY,
     CONF_TIBBER_HOME,
+    CONF_WEATHER_ENTITY,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_CMD_GRID_CHARGE,
     DEFAULT_CMD_HOLD,
@@ -41,7 +44,6 @@ from .const import (
     DEFAULT_GRID_CHARGE_POWER,
     DEFAULT_MAX_CHARGE_SOC,
     DEFAULT_PASSWORD,
-    DEFAULT_PROFILE_WEEKS,
     DEFAULT_PV_FACTOR,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SHIFT_COST,
@@ -57,8 +59,10 @@ DEVICE_OPTIONS = (
     CONF_SCAN_INTERVAL,
     CONF_STATUS_INTERVAL,
     CONF_BATTERY_CAPACITY,
-    CONF_PROFILE_WEEKS,
+    CONF_PROFILE_WEEKS,  # removed from the form; saving the step drops the old value
     CONF_PROFILE_SOURCE,
+    CONF_TEMPERATURE_ENTITY,
+    CONF_WEATHER_ENTITY,
     CONF_CONTROL_ENABLED,
     CONF_CMD_STANDARD,
     CONF_CMD_HOLD,
@@ -74,6 +78,7 @@ SCHEDULE_OPTIONS = (
     CONF_SHIFT_COST,
     CONF_EXPORT_PRICE,
     CONF_PV_FACTOR,
+    CONF_PV_AUTO_CORRECT,
 )
 
 
@@ -263,6 +268,9 @@ class HyCubeOptionsFlow(OptionsFlow):
                     default=opts.get(CONF_EXPORT_PRICE, DEFAULT_EXPORT_PRICE),
                 ): _number(0, 50, 0.1, "ct/kWh"),
                 vol.Required(
+                    CONF_PV_AUTO_CORRECT, default=opts.get(CONF_PV_AUTO_CORRECT, True)
+                ): selector.BooleanSelector(),
+                vol.Required(
                     CONF_PV_FACTOR, default=opts.get(CONF_PV_FACTOR, DEFAULT_PV_FACTOR)
                 ): _number(0.3, 1.5, 0.05),
             }
@@ -274,7 +282,7 @@ class HyCubeOptionsFlow(OptionsFlow):
 
     async def async_step_device(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
-            for key in (CONF_SCAN_INTERVAL, CONF_STATUS_INTERVAL, CONF_PROFILE_WEEKS):
+            for key in (CONF_SCAN_INTERVAL, CONF_STATUS_INTERVAL):
                 user_input[key] = int(user_input[key])
             return self._save(user_input, DEVICE_OPTIONS)
 
@@ -297,13 +305,14 @@ class HyCubeOptionsFlow(OptionsFlow):
                         mode=selector.NumberSelectorMode.BOX,
                     )
                 ),
-                vol.Required(
-                    CONF_PROFILE_WEEKS, default=opts.get(CONF_PROFILE_WEEKS, DEFAULT_PROFILE_WEEKS)
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=52, step=1, mode=selector.NumberSelectorMode.BOX)
-                ),
                 vol.Optional(CONF_PROFILE_SOURCE): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="sensor", device_class="energy")
+                ),
+                vol.Optional(CONF_TEMPERATURE_ENTITY): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
+                ),
+                vol.Optional(CONF_WEATHER_ENTITY): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="weather")
                 ),
                 vol.Required(
                     CONF_CONTROL_ENABLED, default=opts.get(CONF_CONTROL_ENABLED, True)

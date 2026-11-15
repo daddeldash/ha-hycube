@@ -15,7 +15,9 @@ DEFAULT_PASSWORD: Final = "hycube"
 CONF_SCAN_INTERVAL: Final = "scan_interval"
 CONF_STATUS_INTERVAL: Final = "status_interval"
 CONF_BATTERY_CAPACITY: Final = "battery_capacity"
-CONF_PROFILE_WEEKS: Final = "profile_weeks"
+CONF_PROFILE_WEEKS: Final = "profile_weeks"  # no longer used: the archive is kept for good
+CONF_TEMPERATURE_ENTITY: Final = "temperature_entity"
+CONF_WEATHER_ENTITY: Final = "weather_entity"
 CONF_PROFILE_SOURCE: Final = "profile_source"
 CONF_CONTROL_ENABLED: Final = "control_enabled"
 CONF_CMD_STANDARD: Final = "cmd_standard"
@@ -31,6 +33,7 @@ CONF_EFFICIENCY: Final = "efficiency"
 CONF_SHIFT_COST: Final = "shift_cost"
 CONF_EXPORT_PRICE: Final = "export_price"
 CONF_PV_FACTOR: Final = "pv_factor"
+CONF_PV_AUTO_CORRECT: Final = "pv_auto_correct"
 
 DEFAULT_GRID_CHARGE_POWER: Final = 2500  # W drawn from the grid while charging
 DEFAULT_MAX_CHARGE_SOC: Final = 100  # % grid charging never goes above this
@@ -58,7 +61,6 @@ DEFAULT_SCAN_INTERVAL: Final = 10  # s, realtime power values (/get_values/)
 MIN_SCAN_INTERVAL: Final = 5
 DEFAULT_STATUS_INTERVAL: Final = 60  # s, status flags (/data_row/)
 DEFAULT_BATTERY_CAPACITY: Final = 10.0  # kWh usable
-DEFAULT_PROFILE_WEEKS: Final = 8
 
 # Command templates for the battery modes, one request per line, sent in order.
 # From the HyWeb UI (2.065):
@@ -117,8 +119,11 @@ REQUEST_SPACING: Final = 0.5  # s minimum between two requests to the device
 # Transient poll failures within this window keep the last values instead of
 # turning every entity unavailable.
 STALE_TOLERANCE: Final = timedelta(seconds=120)
-# Past days of /db_today/ fetched for the consumption profile, one at a time.
+# Past days of /db_today/ fetched for the archive, one at a time.
 HISTORY_REQUEST_SPACING: Final = 3.0  # s
+# Days fetched per run (nightly and at start) until the archive reaches as far
+# back as the device's own statistics.
+ARCHIVE_DAYS_PER_RUN: Final = 30
 
 # A gap between two successful samples longer than this triggers a backfill
 # from the 5-minute statistics of /db_today/.
