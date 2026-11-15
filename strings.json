@@ -40,6 +40,13 @@
     "step": {
       "init": {
         "title": "HyCube options",
+        "menu_options": {
+          "device": "Device, profile and control",
+          "schedule": "Schedule (cost optimisation)"
+        }
+      },
+      "device": {
+        "title": "Device, profile and control",
         "data": {
           "scan_interval": "Realtime poll interval",
           "status_interval": "Status poll interval",
@@ -58,6 +65,30 @@
           "cmd_standard": "One request per line, sent in order. Default: stop grid charging and restore the battery split (85 % normal operation, 5 % buffer).",
           "cmd_grid_charge": "{soc} = grid charge target, {current_soc} = current SoC.",
           "cmd_hold": "Default: stop grid charging and shrink normal operation to {hold_active} (= 100 - current SoC, at least 10) so the reserve starts at the current SoC. Moved up while PV charges. Untested - see README."
+        }
+      },
+      "schedule": {
+        "title": "Schedule",
+        "description": "From the consumption profile, the Energy dashboard's PV forecast and the Tibber prices the schedule decides when the battery supplies the home, is held or charges from the grid.",
+        "data": {
+          "tibber_home": "Tibber home (optional)",
+          "plan_grid_charge": "Plan grid charging",
+          "plan_hold": "Plan holding",
+          "grid_charge_power": "Grid charge power",
+          "max_charge_soc": "Maximum state of charge for grid charging",
+          "efficiency": "Battery efficiency (optional)",
+          "shift_cost": "Minimum gain",
+          "export_price": "Feed-in tariff",
+          "pv_factor": "PV forecast correction factor"
+        },
+        "data_description": {
+          "tibber_home": "Empty = the only home, or the one whose price sensor the Energy dashboard uses.",
+          "plan_hold": "The battery may be saved for more expensive hours. If the HyCube recharges from the grid while holding, the schedule leaves the mode out for 24 h.",
+          "grid_charge_power": "Power the HyCube draws while charging from the grid.",
+          "efficiency": "Share of the charged energy the battery gives back. Empty = the value measured by the integration (80 % until then).",
+          "shift_cost": "Grid charging and holding are only planned if they save more than this per kWh. Covers wear and forecast errors.",
+          "export_price": "Revenue per kWh fed into the grid.",
+          "pv_factor": "Multiplies the PV forecast, e.g. 0.9 if it is usually too high."
         }
       }
     }
@@ -204,6 +235,32 @@
       },
       "last_backfill": {
         "name": "Last gap backfill"
+      },
+      "plan_source": {
+        "name": "Schedule source",
+        "state": {
+          "solar": "Solar",
+          "battery": "Battery",
+          "grid": "Grid",
+          "grid_charge": "Battery charging from grid"
+        }
+      },
+      "plan_mode": {
+        "name": "Schedule battery mode",
+        "state": {
+          "standard": "Standard (self-consumption)",
+          "hold": "Hold energy level",
+          "grid_charge": "Charge from grid"
+        }
+      },
+      "plan_next_grid_charge": {
+        "name": "Next grid charge"
+      },
+      "plan_savings": {
+        "name": "Schedule expected savings"
+      },
+      "efficiency_estimate": {
+        "name": "Battery efficiency (estimated)"
       }
     },
     "binary_sensor": {
@@ -238,6 +295,11 @@
     "button": {
       "rebuild_profile": {
         "name": "Rebuild consumption profile"
+      }
+    },
+    "switch": {
+      "plan_auto": {
+        "name": "Follow schedule automatically"
       }
     }
   }

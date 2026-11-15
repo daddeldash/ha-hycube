@@ -21,6 +21,38 @@ CONF_CONTROL_ENABLED: Final = "control_enabled"
 CONF_CMD_STANDARD: Final = "cmd_standard"
 CONF_CMD_HOLD: Final = "cmd_hold"
 CONF_CMD_GRID_CHARGE: Final = "cmd_grid_charge"
+# Schedule ("Fahrplan") options
+CONF_TIBBER_HOME: Final = "tibber_home"
+CONF_PLAN_GRID_CHARGE: Final = "plan_grid_charge"
+CONF_PLAN_HOLD: Final = "plan_hold"
+CONF_GRID_CHARGE_POWER: Final = "grid_charge_power"
+CONF_MAX_CHARGE_SOC: Final = "max_charge_soc"
+CONF_EFFICIENCY: Final = "efficiency"
+CONF_SHIFT_COST: Final = "shift_cost"
+CONF_EXPORT_PRICE: Final = "export_price"
+CONF_PV_FACTOR: Final = "pv_factor"
+
+DEFAULT_GRID_CHARGE_POWER: Final = 2500  # W drawn from the grid while charging
+DEFAULT_MAX_CHARGE_SOC: Final = 100  # % grid charging never goes above this
+DEFAULT_SHIFT_COST: Final = 1.0  # ct per kWh moved in time (wear, model error)
+DEFAULT_EXPORT_PRICE: Final = 0.0  # ct per kWh fed into the grid
+DEFAULT_PV_FACTOR: Final = 1.0
+# Stored-and-returned share of the energy charged into the battery, used until
+# the integration has measured it.
+DEFAULT_EFFICIENCY: Final = 0.80
+EFFICIENCY_MIN_SAMPLES: Final = 3
+# AC/DC conversion when charging from the grid, on top of the battery losses.
+GRID_CHARGE_AC_EFFICIENCY: Final = 0.95
+# Changing the battery mode sends requests that rewrite the device's battery
+# split; a plan must gain at least this much (EUR) per change.
+PLAN_SWITCH_COST: Final = 0.005
+PLAN_SLOT_MINUTES: Final = 15
+# After leaving "hold" the battery was seen not to discharge for up to 1.5 h.
+# The plan assumes that long, so it ends "hold" early enough.
+HOLD_RELEASE_IDLE: Final = 5400  # s
+# "Hold" is left out of the plan this long after the controller was seen
+# refilling the reserve from the grid.
+HOLD_BLOCK_SECONDS: Final = 86400
 
 DEFAULT_SCAN_INTERVAL: Final = 10  # s, realtime power values (/get_values/)
 MIN_SCAN_INTERVAL: Final = 5
@@ -68,8 +100,11 @@ HOLD_RELEASE_WATCH: Final = 3600  # s after leaving hold that are watched
 HOLD_RELEASE_WARN_AFTER: Final = 600  # s of idling before the warning
 
 # --- Capacity estimate --------------------------------------------------------
-CAPACITY_MIN_DROP: Final = 20  # % SoC drop per sample
-CAPACITY_MAX_CHARGE_WH: Final = 20  # charging that invalidates a stretch
+CAPACITY_MIN_DROP: Final = 20  # % SoC drop per discharge sample
+# Charging rarely runs 20 % in one go in winter; both ends of a stretch sit on
+# a SoC step, so a shorter one is still exact enough for the running mean.
+CAPACITY_MIN_RISE: Final = 10  # % SoC rise per charge sample
+CAPACITY_MAX_CHARGE_WH: Final = 20  # opposite flow that invalidates a stretch
 CAPACITY_WEIGHT: Final = 0.3  # weight of a new sample in the running mean
 
 # --- Polling behaviour --------------------------------------------------------
@@ -111,6 +146,13 @@ MODE_COMMAND_DEFAULT: Final = {
     MODE_HOLD: DEFAULT_CMD_HOLD,
     MODE_GRID_CHARGE: DEFAULT_CMD_GRID_CHARGE,
 }
+
+# --- Schedule: what supplies the home in a slot ---------------------------------
+SOURCE_SOLAR: Final = "solar"
+SOURCE_BATTERY: Final = "battery"
+SOURCE_GRID: Final = "grid"
+SOURCE_GRID_CHARGE: Final = "grid_charge"
+SOURCES: Final = [SOURCE_SOLAR, SOURCE_BATTERY, SOURCE_GRID, SOURCE_GRID_CHARGE]
 
 DEFAULT_TARGET_SOC: Final = 80
 

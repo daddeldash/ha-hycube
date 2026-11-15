@@ -21,6 +21,9 @@ direkt im lokalen Netz über die *CubeConnect*-API der HyWeb-Oberfläche aus, ga
 - **Verbrauchsprofil und Prognose**: Aus den letzten Wochen entsteht ein Wochentag-×-Stunde-Profil
   (neuere Wochen zählen stärker). Daraus folgen Prognosen für die nächste Stunde, den Rest des Tages,
   die nächsten 24 h und morgen sowie eine Schätzung, **wann der Akku ohne PV leer wäre**.
+- **Kostenoptimierter Fahrplan**: Aus Verbrauchsprofil, PV-Prognose und Tibber-Preisen für heute und
+  morgen berechnet die Integration, wann die PV das Haus versorgt, wann der Akku, wann das Netz und
+  wann sich Laden aus dem Netz lohnt. Auf Wunsch schaltet sie den Batteriemodus selbst.
 - **Batteriesteuerung**: Modi *Standard*, *Energielevel halten* und *Aus dem Netz laden* mit
   einstellbarem Ziel-Ladezustand.
 - **Statusflags**: Netzladung aktiv, Batterie-Zeitplan, Notstrom (EPS) aktiviert und Überlast.
@@ -64,7 +67,9 @@ automatisch eine Neu-Anmeldung.
 
 ## Optionen
 
-Erreichbar über **Geräte & Dienste → HyCube → Konfigurieren**.
+Erreichbar über **Geräte & Dienste → HyCube → Konfigurieren**. Der Dialog hat zwei Bereiche.
+
+### Gerät, Profil und Steuerung
 
 | Option | Standard | Beschreibung |
 | --- | --- | --- |
@@ -75,6 +80,20 @@ Erreichbar über **Geräte & Dienste → HyCube → Konfigurieren**.
 | Profil-Quelle | leer | Optional ein beliebiger Energie-Sensor mit Langzeitstatistik. Leer = Tagesstatistik der HyCube (Fallback: Hausverbrauch-Zähler dieser Integration). |
 | Batteriesteuerung aktivieren | an | Ist sie aus, lehnt die Integration jede Modusänderung ab und liest nur noch. |
 | Request für Modus … | siehe unten | Welche HTTP-Requests ein Modus auslöst. |
+
+### Fahrplan
+
+| Option | Standard | Beschreibung |
+| --- | --- | --- |
+| Tibber-Zuhause | leer | Zuhause, dessen Preise gelten. Leer = das einzige Zuhause oder das, dessen Preis-Sensor im Energie-Dashboard eingetragen ist. |
+| Netzladung einplanen | an | Der Fahrplan darf den Akku aus dem Netz laden. |
+| Halten einplanen | an | Der Fahrplan darf den Akku für teurere Stunden aufsparen (Modus *Energielevel halten*). |
+| Netzladeleistung | 2500 W | Leistung, mit der die HyCube aus dem Netz lädt. |
+| Maximaler Ladezustand bei Netzladung | 100 % | Höher lädt der Fahrplan nicht aus dem Netz. |
+| Wirkungsgrad des Akkus | leer | Anteil der geladenen Energie, den der Akku wieder abgibt. Leer = der gemessene Wert der Diagnose-Entität **Wirkungsgrad (geschätzt)**, bis dahin 80 %. |
+| Mindestvorteil | 1 ct/kWh | Netzladung und Halten werden nur eingeplant, wenn sie je kWh mehr als diesen Betrag sparen. Deckt Verschleiß und Prognosefehler ab. |
+| Einspeisevergütung | 0 ct/kWh | Erlös je eingespeister kWh. |
+| Korrekturfaktor PV-Prognose | 1,0 | Multipliziert die PV-Prognose, z. B. 0,9, wenn sie meist zu hoch liegt. |
 
 ## Batteriemodi
 
@@ -141,28 +160,86 @@ halten* gilt die Grenze des Standard-Modus: Der Sensor zeigt dann, wie lange der
 der Freigabe reicht. Die Attribute `reserve_soc` (Grenze in %) und `usable_energy_kwh` zeigen die
 verwendeten Werte.
 
-Beispiel: Um 2 Uhr nachts aus dem Netz laden, wenn der Akku sonst vor 10 Uhr leer wäre (z. B. bei
-günstigem Nachttarif). Zurück auf *Standard* schaltet eine zweite Automation oder die HyCube selbst,
-sobald der Ziel-Ladezustand erreicht ist.
+## Fahrplan
+
+Der Fahrplan beantwortet für jede Viertelstunde bis zum Ende der bekannten Preise: Versorgt die PV das
+Haus, der Akku oder das Netz, und lohnt es sich, den Akku aus dem Netz zu laden? Ziel sind die
+niedrigsten Stromkosten.
+
+Eingangsdaten:
+
+- **Preise**: Tibber, heute und (ab etwa 13 Uhr) morgen, über die Aktion `tibber.get_prices`.
+  Die Tibber-Integration muss eingerichtet sein.
+- **PV-Prognose**: die Prognose, die im Energie-Dashboard bei der Solarproduktion eingetragen ist
+  (z. B. Forecast.Solar). Ohne Prognose rechnet der Fahrplan ohne PV-Ertrag.
+- **Verbrauch**: das Verbrauchsprofil dieser Integration.
+- **Akku**: aktueller Ladezustand, Reserve-Grenze, gemessene Kapazität und gemessener Wirkungsgrad.
+
+Der Fahrplan wird jede Viertelstunde neu berechnet, immer ab dem tatsächlichen Ladezustand. Je
+Viertelstunde wählt er einen der drei Batteriemodi:
+
+| Modus | Wann der Fahrplan ihn wählt |
+| --- | --- |
+| *Standard* | Normalfall: PV-Überschuss lädt den Akku, der Akku versorgt das Haus, den Rest liefert das Netz. |
+| *Energielevel halten* | Der Akkuinhalt ist später mehr wert als jetzt: Das Haus läuft am Netz, der Akku wartet auf die teuren Stunden. |
+| *Aus dem Netz laden* | Der Strom ist jetzt so günstig, dass sich Laden trotz der Verluste für spätere teure Stunden lohnt. |
+
+Nach dem Verlassen von *Energielevel halten* entlädt die HyCube bis zu anderthalb Stunden nicht (siehe
+[Batteriemodi](#batteriemodi)). Der Fahrplan rechnet mit dieser Wartezeit und beendet das Halten
+entsprechend früher, damit der Akku zur teuren Phase wieder liefert. Im Plan steht in dieser Zeit
+*Standard* mit Versorgung aus dem Netz.
+
+Netzladung lohnt sich seltener, als die Preiskurve vermuten lässt: Von 1 kWh aus dem Netz kommen
+nach Lade- und Entladeverlusten etwa 0,75 kWh im Haus an. Der teure Preis muss deshalb rund ein Drittel
+über dem günstigen liegen. An Tagen mit flacher Preiskurve bleibt der Fahrplan beim Modus *Standard*.
+
+### Sensoren
+
+- **Fahrplan Quelle**: was das Haus gerade laut Plan versorgt (*PV*, *Akku*, *Netz*, *Akku lädt aus dem
+  Netz*). Attribute: `schedule` (zusammengefasste Abschnitte mit `start`, `end`, `source`, `mode`,
+  `price`, `load_kwh`, `pv_kwh`, `grid_kwh`, `battery_kwh`, `soc`), `slots` (dieselben Werte je
+  Viertelstunde, z. B. für ApexCharts), `horizon_end`, `capacity_kwh`, `efficiency`, `reserve_soc`,
+  `tibber_home`, `pv_forecast`, `hold_blocked`, `automatic` und `error`. Ohne Plan nennt `error` den
+  Grund: `no_prices` (keine Tibber-Preise), `no_profile` (Verbrauchsprofil noch leer), `no_soc`
+  (Ladezustand unbekannt) oder `failed`.
+- **Fahrplan Batteriemodus**: der Modus, den der Plan jetzt vorsieht, bei Netzladung mit `target_soc`.
+- **Nächste Netzladung**: Beginn des nächsten Ladeabschnitts, mit Ende, Ziel-Ladezustand, Energie und Preis.
+- **Fahrplan erwartete Ersparnis**: Ersparnis gegenüber durchgehendem Standardbetrieb bis zum Ende
+  des Plans, mit den Kosten beider Varianten als Attribute.
+
+### Automatisch ausführen
+
+Mit dem Schalter **Fahrplan automatisch ausführen** (Standard: aus) setzt die Integration den
+Batteriemodus selbst, jeweils zur Viertelstunde und nur bei einer Änderung. Beobachte den Plan am besten
+erst ein paar Tage, bevor du den Schalter einschaltest.
+
+- Solange der Schalter an ist, bestimmt der Fahrplan den Modus. Eine Auswahl von Hand gilt nur bis zur
+  nächsten Viertelstunde.
+- Bei Netzladung setzt der Fahrplan auch den Ziel-Ladezustand.
+- Ohne Preise oder ohne Plan stellt die Integration einen von ihr gesetzten Modus auf *Standard* zurück,
+  ebenso beim Ausschalten des Schalters.
+- Lädt die HyCube im Modus *Energielevel halten* den Akku aus dem Netz nach (siehe
+  [Batteriemodi](#batteriemodi)), nimmt der Fahrplan diesen Modus für 24 Stunden aus der Planung und
+  schreibt eine Warnung ins Log.
+- Die Option **Batteriesteuerung aktivieren** gilt weiter: Ist sie aus, wird nichts geschaltet.
+
+### Karte für das Dashboard
+
+Eine Markdown-Karte zeigt den Fahrplan als Tabelle:
 
 ```yaml
-triggers:
-  - trigger: time
-    at: "02:00:00"
-conditions:
-  - condition: template
-    value_template: >
-      {{ has_value('sensor.hycube_batterie_leer_prognose_ohne_pv')
-         and as_datetime(states('sensor.hycube_batterie_leer_prognose_ohne_pv')) < today_at('10:00') }}
-actions:
-  - action: select.select_option
-    target:
-      entity_id: select.hycube_batteriemodus
-    data:
-      option: grid_charge
+type: markdown
+title: HyCube Fahrplan
+content: |-
+  {%- set quelle = {'solar': 'PV', 'battery': 'Akku', 'grid': 'Netz', 'grid_charge': 'Akku lädt aus dem Netz'} %}
+  | Zeit | Versorgung | Preis | Akku danach |
+  |:--|:--|--:|--:|
+  {%- for b in state_attr('sensor.hycube_fahrplan_quelle', 'schedule') or [] %}
+  | {{ as_timestamp(b.start) | timestamp_custom('%a %H:%M') }}–{{ as_timestamp(b.end) | timestamp_custom('%H:%M') }} | {{ quelle[b.source] }}{{ ' (Akku halten)' if b.mode == 'hold' }} | {{ (b.price * 100) | round(1) }} ct | {{ b.soc }} % |
+  {%- endfor %}
 ```
 
-(Entitäts-IDs hängen von der Sprache bei der Einrichtung ab; passe sie an deine Installation an.)
+(Entitäts-IDs hängen von Sprache und Bereich bei der Einrichtung ab; passe sie an deine Installation an.)
 
 ## Entitäten
 
@@ -180,12 +257,16 @@ Externe Erzeugung*, Hausverbrauch · Batterie gespeicherte Energie
 **Sensoren (Prognose)**: Batterie leer (ohne PV), Verbrauchsprognose nächste Stunde / Rest des Tages /
 24 h / morgen
 
-**Diagnose**: Batteriekapazität (geschätzt) · Letzte Lückenfüllung (mit Lückenlänge, nachgetragener
+**Sensoren (Fahrplan)**: Fahrplan Quelle, Fahrplan Batteriemodus, Nächste Netzladung, Fahrplan
+erwartete Ersparnis
+
+**Diagnose**: Batteriekapazität (geschätzt) · Wirkungsgrad (geschätzt) · Letzte Lückenfüllung (mit Lückenlänge, nachgetragener
 Energie und nicht rekonstruierbarer Zeit als Attribute)
 
 **Binärsensoren**: Netzladung aktiv, Batterie-Zeitplan aktiv, Notstrom aktiviert, Notstrom Überlast
 
-**Steuerung**: Auswahl *Batteriemodus*, Zahl *Netzladung Ziel-Ladezustand*, Button *Verbrauchsprofil neu berechnen*
+**Steuerung**: Auswahl *Batteriemodus*, Zahl *Netzladung Ziel-Ladezustand*, Schalter *Fahrplan
+automatisch ausführen*, Button *Verbrauchsprofil neu berechnen*
 
 \* standardmäßig deaktiviert oder Diagnose-Entität, bei Bedarf in den Entitätseinstellungen aktivieren.
 
@@ -224,6 +305,23 @@ Verwendete Endpunkte der HyCube:
 | `GET /db_today/?day=YYYY-MM-DD` | 5-Minuten-Mittelwerte eines Tages (undokumentiert) |
 | `GET /smartCharging/ManualChargingActivation/` | Netzladung starten/stoppen (undokumentiert) |
 | `GET /Bat/setCustomBat/` | Akku-Aufteilung Normalbetrieb/Puffer/Reserve (undokumentiert) |
+
+## Entwicklung
+
+Die Rechenlogik (`energy.py`, `profile.py`, `optimizer.py`) kommt ohne Home Assistant aus und wird mit
+der Standardbibliothek getestet. `-P` verhindert, dass Module des Repositorys (`select.py`,
+`profile.py`) Module der Standardbibliothek verdecken:
+
+```bash
+python3 -P -m unittest discover -s tests
+```
+
+Die Tests in `tests/ha` fahren die Integration in einem echten Home Assistant mit simuliertem Gerät
+hoch. Sie brauchen `pytest-homeassistant-custom-component`:
+
+```bash
+cd tests/ha && pytest
+```
 
 ## Mitwirken
 

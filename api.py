@@ -143,9 +143,8 @@ class HyCubeApi:
                 raise HyCubeConnectionError(f"{path}: {err!r}") from err
         raise HyCubeConnectionError(path)  # pragma: no cover
 
-    async def _get_json(
-        self, path: str, params: dict[str, str] | None = None
-    ) -> Any:
+    async def _authed_get(self, path: str, params: dict[str, str] | None = None) -> str:
+        """GET with the token; a rejected token is renewed once."""
         async with self._lock:
             for attempt in (1, 2):
                 token = await self._ensure_token()
@@ -162,13 +161,19 @@ class HyCubeApi:
                     if attempt == 2:
                         raise HyCubeAuthError(f"{path}: unauthorized")
                     continue
-                try:
-                    return json.loads(text)
-                except ValueError as err:
-                    raise HyCubeConnectionError(
-                        f"{path}: invalid JSON: {text[:120]!r}"
-                    ) from err
+                return text
         raise HyCubeConnectionError(path)  # pragma: no cover
+
+    async def _get_json(
+        self, path: str, params: dict[str, str] | None = None
+    ) -> Any:
+        text = await self._authed_get(path, params)
+        try:
+            return json.loads(text)
+        except ValueError as err:
+            raise HyCubeConnectionError(
+                f"{path}: invalid JSON: {text[:120]!r}"
+            ) from err
 
     # --- endpoints --------------------------------------------------------------
     async def get_info(self) -> dict[str, Any]:
@@ -194,9 +199,7 @@ class HyCubeApi:
         if parts.scheme or parts.netloc or not parts.path.startswith("/"):
             raise HyCubeError(f"Invalid command path: {command!r}")
         params = dict(parse_qsl(parts.query, keep_blank_values=True))
-        async with self._lock:
-            token = await self._ensure_token()
-            text = await self._raw_get(parts.path, {"Authorization": token}, params)
+        text = await self._authed_get(parts.path, params)
         _LOGGER.debug("Command %s -> %s", command, text[:200])
         return text
 
