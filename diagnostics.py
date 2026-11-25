@@ -51,6 +51,7 @@ async def async_get_config_entry_diagnostics(
         "profile": c.profile.as_dict(),
         "charge_capacity_estimate": c.charge_capacity.as_dict(),
         "efficiency": c.efficiency(),
+        "counter_efficiency": asdict(c.counter_efficiency) if c.counter_efficiency else None,
         "schedule": _schedule(c.planner),
     }
 

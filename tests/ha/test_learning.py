@@ -106,7 +106,7 @@ async def test_cache_of_earlier_versions_is_taken_over(
     today = dt_util.now().date()
     old = {(today - timedelta(days=d)).isoformat(): [0.5] * 24 for d in range(1, 57)}
     entry = MockConfigEntry(
-        domain=DOMAIN, unique_id="SN123", version=1, minor_version=2,
+        domain=DOMAIN, unique_id="SN123", version=1, minor_version=3,
         data={"host": "192.0.2.1", "username": "u", "password": "p"},
         options={"tibber_home": "Home"},
     )
@@ -185,7 +185,7 @@ async def test_measured_forecast_error(hass: HomeAssistant, hass_storage, api, t
             "pred": [0.75] * 24,  # 25 % too high
         }
     entry = MockConfigEntry(
-        domain=DOMAIN, unique_id="SN123", version=1, minor_version=2,
+        domain=DOMAIN, unique_id="SN123", version=1, minor_version=3,
         data={"host": "192.0.2.1", "username": "u", "password": "p"},
         options={"tibber_home": "Home"},
     )
@@ -227,7 +227,7 @@ async def test_pv_forecast_is_corrected(hass: HomeAssistant, hass_storage, api, 
         for age in range(1, 22)
     }
     entry = MockConfigEntry(
-        domain=DOMAIN, unique_id="SN123", version=1, minor_version=2,
+        domain=DOMAIN, unique_id="SN123", version=1, minor_version=3,
         data={"host": "192.0.2.1", "username": "u", "password": "p"},
         options={"tibber_home": "Home"},
     )

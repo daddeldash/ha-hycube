@@ -13,9 +13,13 @@ from .api import HyCubeApi
 from .const import (
     CONF_CMD_GRID_CHARGE,
     CONF_CMD_STANDARD,
+    CONF_SHIFT_COST,
+    CONF_STANDBY_POWER,
     DOMAIN,
     LEGACY_CMD_GRID_CHARGE,
     LEGACY_CMD_STANDARD,
+    LEGACY_SHIFT_COST,
+    LEGACY_STANDBY_POWER,
     STORAGE_VERSION,
 )
 from .coordinator import HyCubeConfigEntry, HyCubeCoordinator, archive_store_key
@@ -50,7 +54,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyCubeConfigEntry) -> bo
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: HyCubeConfigEntry) -> bool:
-    """1.1 -> 1.2: modes send several requests (battery split for "hold")."""
+    """Bring options of earlier versions up to date.
+
+    1.1 -> 1.2: modes send several requests (battery split for "hold").
+    1.2 -> 1.3: the standby consumption (50 W) and minimum gain (1 ct/kWh)
+    suggested by version 1.3 are dropped: the standby was not there in the
+    measurements and blocked every plan, the minimum gain halved the saving.
+    """
     if entry.version > 1:
         return False
     if entry.minor_version < 2:
@@ -65,6 +75,16 @@ async def async_migrate_entry(hass: HomeAssistant, entry: HyCubeConfigEntry) -> 
                 options.pop(key, None)  # fall back to the new default
         hass.config_entries.async_update_entry(entry, options=options, minor_version=2)
         _LOGGER.info("Migrated HyCube entry to 1.2")
+    if entry.minor_version < 3:
+        options = dict(entry.options)
+        for key, legacy in (
+            (CONF_STANDBY_POWER, LEGACY_STANDBY_POWER),
+            (CONF_SHIFT_COST, LEGACY_SHIFT_COST),
+        ):
+            if key in options and float(options[key]) == legacy:
+                options.pop(key)
+        hass.config_entries.async_update_entry(entry, options=options, minor_version=3)
+        _LOGGER.info("Migrated HyCube entry to 1.3")
     return True
 
 

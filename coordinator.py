@@ -75,6 +75,7 @@ from .const import (
 )
 from .energy import (
     CapacityEstimator,
+    CounterEfficiency,
     EnergyAccumulator,
     buckets_from_day_stats,
     hourly_kwh,
@@ -139,6 +140,8 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         self.capacity = CapacityEstimator()
         # Energy the battery takes per 100 % SoC; with `capacity` the efficiency.
         self.charge_capacity = CapacityEstimator(rising=True)
+        # Round-trip efficiency from the counters, measured every night.
+        self.counter_efficiency: CounterEfficiency | None = None
         self.planner = HyCubePlanner(hass, self)
         self.forecaster = ConsumptionForecaster(hass, self)
         # Hourly consumption and PV production of all past days, kept for good.
@@ -200,6 +203,17 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         self.charge_capacity = CapacityEstimator(
             stored.get("charge_capacity"), rising=True
         )
+        if measured := stored.get("counter_efficiency"):
+            try:
+                self.counter_efficiency = CounterEfficiency(
+                    float(measured["efficiency"]),
+                    date.fromisoformat(measured["start"]),
+                    date.fromisoformat(measured["end"]),
+                    float(measured["charged"]),
+                    float(measured["discharged"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                self.counter_efficiency = None
         self.planner.restore(stored.get("planner"))
         try:
             self.info = await self.api.get_info()
@@ -247,6 +261,7 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
             "last_backfill": self.last_backfill,
             "capacity": self.capacity.as_dict(),
             "charge_capacity": self.charge_capacity.as_dict(),
+            "counter_efficiency": _efficiency_dict(self.counter_efficiency),
             "planner": self.planner.as_dict(),
         }
 
@@ -485,7 +500,14 @@ class HyCubeCoordinator(DataUpdateCoordinator[HyCubeData]):
         return max(self._hold_left_at + HOLD_RELEASE_IDLE - time.time(), 0.0)
 
     def efficiency(self) -> float | None:
-        """Measured share of the charged energy the battery gives back."""
+        """Measured share of the charged energy the battery gives back.
+
+        The counters over weeks come first: they hold the real cost of a
+        cycle. The capacity estimators need clean charging stretches that
+        winter PV rarely gives.
+        """
+        if self.counter_efficiency is not None:
+            return self.counter_efficiency.efficiency
         return round_trip_efficiency(
             self.capacity, self.charge_capacity, EFFICIENCY_MIN_SAMPLES
         )
@@ -757,3 +779,15 @@ def _day_hours(
         if start.date() == day
     }
     return [by_hour.get(h) for h in range(24)] if by_hour else None
+
+
+def _efficiency_dict(measured: CounterEfficiency | None) -> dict[str, Any] | None:
+    if measured is None:
+        return None
+    return {
+        "efficiency": measured.efficiency,
+        "start": measured.start.isoformat(),
+        "end": measured.end.isoformat(),
+        "charged": round(measured.charged, 3),
+        "discharged": round(measured.discharged, 3),
+    }

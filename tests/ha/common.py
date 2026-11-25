@@ -56,7 +56,7 @@ async def setup(hass: HomeAssistant, options: dict | None = None) -> MockConfigE
         domain=DOMAIN,
         unique_id=SERIAL,
         version=1,
-        minor_version=2,
+        minor_version=3,
         data={"host": "192.0.2.1", "username": "u", "password": "p"},
         options=options or {"tibber_home": "Home"},
     )

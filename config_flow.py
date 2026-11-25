@@ -89,7 +89,7 @@ class HyCubeConfigFlow(ConfigFlow, domain=DOMAIN):
     """Set up a HyCube by IP address."""
 
     VERSION = 1
-    MINOR_VERSION = 2
+    MINOR_VERSION = 3
 
     async def _validate(self, data: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
         api = HyCubeApi(

@@ -93,9 +93,9 @@ Erreichbar über **Geräte & Dienste → HyCube → Konfigurieren**. Der Dialog 
 | Halten einplanen | an | Der Fahrplan darf den Akku für teurere Stunden aufsparen (Modus *Energielevel halten*). |
 | Netzladeleistung | 2500 W | Leistung, mit der die HyCube aus dem Netz lädt. Gilt nur, bis die Integration die höchste Ladeleistung selbst gemessen hat. |
 | Maximaler Ladezustand bei Netzladung | 100 % | Höher lädt der Fahrplan nicht aus dem Netz. |
-| Wirkungsgrad des Akkus | leer | Anteil der geladenen Energie, den der Akku wieder abgibt. Leer = der gemessene Wert der Diagnose-Entität **Wirkungsgrad (geschätzt)**, bis dahin 78 %. |
-| Standby-Verbrauch des Speichers | 50 W | Leistung, die der Speicher selbst zieht, solange der Akku Energie hält. Macht langes Aufsparen im Fahrplan teurer. |
-| Mindestvorteil | 1 ct/kWh | Netzladung und Halten werden nur eingeplant, wenn sie je kWh mehr als diesen Betrag sparen. Deckt Verschleiß und Prognosefehler ab. |
+| Wirkungsgrad des Akkus | leer | Anteil der geladenen Energie, den der Akku wieder abgibt. Leer = aus den Zählern gemessen (Diagnose-Entität **Wirkungsgrad (geschätzt)**), bis dahin 78 %. Ein eingetragener Wert ersetzt die Messung; lass das Feld leer, sobald gemessen wird. |
+| Standby-Verbrauch des Speichers | 0 W | Nur nötig, wenn der Speicher mit gefülltem Akku messbar mehr zieht als mit leerem. Bei der HyCube ist das nicht der Fall (siehe unten). |
+| Mindestvorteil | 0 ct/kWh | Netzladung und Halten werden nur eingeplant, wenn sie je kWh zusätzlich mindestens diesen Betrag sparen. Normalerweise 0, weil jeder Plan ohnehin gegen ungünstige Annahmen geprüft wird. |
 | Einspeisevergütung | 0 ct/kWh | Erlös je eingespeister kWh. |
 | PV-Prognose automatisch korrigieren | an | Die Integration vergleicht Prognose und echte Erzeugung der letzten Wochen und korrigiert die Prognose je Tagesstunde. |
 | Zusätzlicher Faktor PV-Prognose | 1,0 | Multipliziert die PV-Prognose zusätzlich zur automatischen Korrektur. Normalerweise 1. |
@@ -174,6 +174,13 @@ einem klaren Vorsprung. Das geschieht täglich um 00:10 Uhr und beim Start, auf 
 Button **Verbrauchsprofil neu berechnen**. Die Prognose selbst wird stündlich mit der aktuellen
 Wettervorhersage erneuert.
 
+Der Button stößt alles an, was sonst nachts läuft: Archiv ergänzen, Verbrauch aus der eingestellten
+Profil-Quelle mit ihrer ganzen Historie neu einlesen, Temperaturen laden, Modelle zurückrechnen und
+auswählen, PV-Korrektur, Wirkungsgrad und Erfolgskontrolle neu bestimmen, danach Prognose und
+Fahrplan neu berechnen. Nach einem Wechsel der Profil-Quelle muss also niemand bis zur Nacht warten.
+Die gespeicherte Prognose des laufenden Tages wird dabei durch eine aus der neuen Quelle ersetzt;
+Prognosen aus einer anderen Quelle zählen nicht für den Sensor **Verbrauchsprognose Fehler**.
+
 ### Sensoren
 
 Die Prognose-Sensoren sind verfügbar, sobald mindestens ein voller Tag an Daten vorliegt. Der Sensor
@@ -232,8 +239,8 @@ Eingangsdaten:
   Prognosen je Tagesstunde, sobald mindestens 5 Tage vorliegen. Das gleicht Verschattung, Schmutz und
   eine ungenaue Ausrichtung aus.
 - **Verbrauch**: die [Verbrauchsprognose](#verbrauchsprognose) dieser Integration.
-- **Akku**: aktueller Ladezustand, Reserve-Grenze, gemessene Kapazität, gemessener Wirkungsgrad,
-  höchste gemessene Lade- und Entladeleistung und der Standby-Verbrauch des Speichers.
+- **Akku**: aktueller Ladezustand, Reserve-Grenze, gemessene Kapazität, gemessener Wirkungsgrad sowie
+  höchste gemessene Lade- und Entladeleistung.
 
 Der Fahrplan wird jede Viertelstunde neu berechnet, immer ab dem tatsächlichen Ladezustand. Je
 Viertelstunde wählt er einen der drei Batteriemodi:
@@ -249,9 +256,22 @@ Nach dem Verlassen von *Energielevel halten* entlädt die HyCube bis zu andertha
 entsprechend früher, damit der Akku zur teuren Phase wieder liefert. Im Plan steht in dieser Zeit
 *Standard* mit Versorgung aus dem Netz.
 
-Netzladung lohnt sich seltener, als die Preiskurve vermuten lässt: Von 1 kWh aus dem Netz kommen
-nach Lade- und Entladeverlusten etwa 0,75 kWh im Haus an. Der teure Preis muss deshalb rund ein Drittel
-über dem günstigen liegen. An Tagen mit flacher Preiskurve bleibt der Fahrplan beim Modus *Standard*.
+### Wie viel Netzladung bringt
+
+Geladen wird nie pauschal bis zum Maximum, sondern nur so viel, wie die teuren Stunden danach laut
+Prognose abnehmen, abzüglich dessen, was die PV bis dahin selbst in den Akku bringt. Das Ladeziel
+bekommt die HyCube als Ziel-Ladezustand mit; sie hört dort von selbst auf, und der Fahrplan schaltet
+zur geplanten Zeit zurück auf *Standard*.
+
+Netzladung lohnt sich seltener, als die Preiskurve vermuten lässt. Der Wirkungsgrad des Akkus,
+gemessen über die Lade- und Entladezähler mehrerer Wochen, liegt beim Entwickler bei rund 73 %: Von
+1 kWh aus dem Netz kommen etwa 0,7 kWh im Haus an. Der teure Preis muss deshalb rund 45 % über dem
+günstigen liegen. Nachgerechnet mit den echten Tibber-Preisen und dem echten Verbrauch vom 10. bis
+23. November 2026 (Tagesspannen 1,15- bis 1,75-fach) hätte der Fahrplan an etwa 5 von 14 Tagen
+nachgeladen und rund 1,30 € gespart, auch mit Prognosefehlern in keinem Durchlauf weniger als 1 €.
+Das ist etwa 1 % der Stromkosten dieser Zeit. Geräte mit höherem Wirkungsgrad (um 90 %) kämen mit
+denselben Preisen auf etwa das Dreifache. Den größten Teil seines Nutzens bringt der Akku weiterhin
+über die PV.
 
 ### Vorsichtige Planung
 
@@ -260,14 +280,20 @@ verläuft als vorhergesagt. Lieber bleibt eine mögliche Ersparnis liegen, als d
 aus dem Netz geladen wird.
 
 - Modi und Ladeziel werden für einen ungünstigen Tag berechnet: 25 % weniger Verbrauch, 25 % mehr
-  PV-Ertrag und ein um ein Zehntel schlechterer Wirkungsgrad. Geladen wird also nur, was auch dann
-  gebraucht wird.
+  PV-Ertrag und ein schlechterer Wirkungsgrad (5 % weniger als gemessen, 10 % weniger, solange nicht
+  gemessen ist oder der Wert in den Optionen steht). Geladen wird also nur, was auch dann gebraucht
+  wird.
 - Der so gefundene Plan wird zusätzlich mit der Prognose selbst und mit einem Tag durchgerechnet, der
   in die andere Richtung abweicht (mehr Verbrauch, weniger PV). Er gilt nur, wenn er in allen drei
   Fällen mindestens 5 ct spart. Sonst wird ohne *Energielevel halten* neu geplant, und wenn auch das
   nicht reicht, bleibt der Akku im Modus *Standard*.
-- Solange der Akku Energie hält, zieht der Speicher selbst Strom (Option **Standby-Verbrauch**).
-  Das zählt in jeder Viertelstunde mit und macht frühes Laden und langes Halten teurer.
+- Der Wirkungsgrad wird jede Nacht aus der Langzeitstatistik der Lade- und Entladezähler bestimmt:
+  über bis zu 90 Tage, mindestens 14 Tage und 15 kWh geladen, Energie im Akku am Ende eingerechnet.
+  Darin steckt auch die Energie, mit der die HyCube den leeren Akku auf der Reserve hält.
+- Einen zusätzlichen Standby-Verbrauch, solange der Akku Energie hält, rechnet der Fahrplan nicht
+  ein: In der Tagesbilanz des Entwicklers verbraucht die HyCube etwa 0,28 kWh am Tag, egal ob der Akku
+  leer oder gefüllt ist (Unterschied rund 1 W). Für andere Speicher gibt es die Option
+  **Standby-Verbrauch**.
 - Für die Ladeleistung gilt die höchste, die die Integration am Akku gemessen hat, für die
   Entladeleistung ebenso.
 
