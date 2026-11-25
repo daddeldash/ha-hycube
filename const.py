@@ -38,20 +38,34 @@ CONF_STANDBY_POWER: Final = "standby_power"
 
 DEFAULT_GRID_CHARGE_POWER: Final = 2500  # W drawn from the grid while charging
 DEFAULT_MAX_CHARGE_SOC: Final = 100  # % grid charging never goes above this
-DEFAULT_SHIFT_COST: Final = 1.0  # ct per kWh moved in time (wear, model error)
+# ct per kWh moved in time. The cautious plan (three cases, efficiency
+# discount, cost per mode change) covers model errors already; on fourteen
+# real days an extra 1 ct halved the saving and made the worst case worse.
+DEFAULT_SHIFT_COST: Final = 0.0
+LEGACY_SHIFT_COST: Final = 1.0  # default up to version 1.3, dropped by the migration
 DEFAULT_EXPORT_PRICE: Final = 0.0  # ct per kWh fed into the grid
 DEFAULT_PV_FACTOR: Final = 1.0
 # Stored-and-returned share of the energy charged into the battery, used until
 # the integration has measured it.
 DEFAULT_EFFICIENCY: Final = 0.78
-# W the storage system draws itself while the battery holds energy. Measured
-# on the author's device: 20-40 W; the plan assumes the upper end.
-DEFAULT_STANDBY_POWER: Final = 50
+# W the storage system draws on top while the battery holds energy. On the
+# author's device the daily energy balance showed no such difference (about
+# 1 W); its trickle charge is part of the measured efficiency already.
+DEFAULT_STANDBY_POWER: Final = 0
+# Version 1.3 suggested 50 W; that value is dropped by the entry migration.
+LEGACY_STANDBY_POWER: Final = 50
 # The schedule only leaves "standard" if that still pays with these
 # assumptions: less consumption to cover, more PV for free, a worse battery.
 CAUTION_LOAD: Final = 0.75
 CAUTION_PV: Final = 1.25
 CAUTION_EFFICIENCY: Final = 0.9
+# A measured efficiency already contains the trickle charge, so less is taken off.
+CAUTION_EFFICIENCY_MEASURED: Final = 0.95
+# Efficiency from the charge and discharge counters: days looked at, and how
+# much must have been charged in them for the ratio to be trusted.
+EFFICIENCY_WINDOW_DAYS: Final = 90
+EFFICIENCY_MIN_CHARGE: Final = 15.0  # kWh
+EFFICIENCY_MIN_DAYS: Final = 14
 # A plan must save at least this much (EUR) in every case it is tested on.
 PLAN_MIN_GAIN: Final = 0.05
 # The battery stops delivering at the reserve and its SoC reading recovers a

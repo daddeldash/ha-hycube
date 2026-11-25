@@ -22,9 +22,28 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
 
-from .archive import EXPORT, GRID, HOME, PRED, PRICE, PV_FORECAST, SAVED, SOC, SOLAR
+from .archive import (
+    EXPORT,
+    GRID,
+    HOME,
+    PRED,
+    PRED_SOURCE,
+    PRICE,
+    PV_FORECAST,
+    SAVED,
+    SOC,
+    SOLAR,
+)
 from .audit import Audit, day_result, summarize
-from .const import CONF_TEMPERATURE_ENTITY, CONF_WEATHER_ENTITY, DOMAIN
+from .const import (
+    CONF_TEMPERATURE_ENTITY,
+    CONF_WEATHER_ENTITY,
+    DOMAIN,
+    EFFICIENCY_MIN_CHARGE,
+    EFFICIENCY_MIN_DAYS,
+    EFFICIENCY_WINDOW_DAYS,
+)
+from .energy import counter_efficiency
 from .energy import to_float
 from .model import (
     KINDS,
@@ -127,9 +146,10 @@ class ConsumptionForecaster:
                     _learn, days, kinds, today, self.kind
                 )
                 self._days = days
-                self.error = measured_error(archive.pairs(HOME, PRED)[-ERROR_DAYS:])
+                self.error = measured_error(self._forecast_pairs()[-ERROR_DAYS:])
                 self.pv = fit_correction(archive.pairs(SOLAR, PV_FORECAST), today)
                 await self._seed_peaks()
+                await self._measure_efficiency()
                 self._audit(today)
                 archive.prune_snapshots(today)
             except Exception:  # noqa: BLE001 - learning must never break the integration
@@ -188,6 +208,75 @@ class ConsumptionForecaster:
                 -self.audit.total,
                 self.audit.active_days,
             )
+
+    def _forecast_pairs(self) -> list[tuple[date, list, list]]:
+        """(day, consumed, forecast) of the forecasts made from the current source.
+
+        A forecast from another profile source (one set by mistake, say) says
+        nothing about the model. Forecasts stored before the source was kept
+        count only if they are within a factor of four of what happened.
+        """
+        source = self.coordinator.profile_source()
+        pairs = []
+        for day, hours, record in self.coordinator.archive.records(HOME):
+            if (forecast := record.get(PRED)) is None:
+                continue
+            made_from = record.get(PRED_SOURCE)
+            if made_from is None:
+                actual = sum(v or 0.0 for v in hours)
+                predicted = sum(v or 0.0 for v in forecast)
+                if not actual or not 0.25 <= predicted / actual <= 4:
+                    continue
+            elif made_from != source:
+                continue
+            pairs.append((day, hours, forecast))
+        return pairs
+
+    async def _measure_efficiency(self) -> None:
+        """Round-trip efficiency from the long-term statistics of the counters."""
+        coordinator = self.coordinator
+        registry = er.async_get(self.hass)
+        unique = coordinator.config_entry.unique_id
+
+        def entity(key: str) -> str | None:
+            return registry.async_get_entity_id("sensor", DOMAIN, f"{unique}_{key}")
+
+        charge, discharge, soc = (
+            entity("energy_battery_charge"),
+            entity("energy_battery_discharge"),
+            entity("battery_soc"),
+        )
+        if not (charge and discharge and soc):
+            return
+        midnight = dt_util.start_of_local_day()
+        start = midnight - timedelta(days=EFFICIENCY_WINDOW_DAYS)
+        energy = {"energy": "kWh"}
+        charged = {
+            begin.date(): value
+            for begin, value in await self._statistics(
+                charge, start, midnight, "day", "change", energy
+            )
+        }
+        discharged = {
+            begin.date(): value
+            for begin, value in await self._statistics(
+                discharge, start, midnight, "day", "change", energy
+            )
+        }
+        # SoC at the start of each day: mean of its first hour.
+        hourly = await self._statistics(
+            soc, start, midnight + timedelta(hours=1), "hour", "mean", None
+        )
+        at_start = {begin.date(): value for begin, value in hourly if begin.hour == 0}
+        rows = [
+            (day, at_start.get(day), charged.get(day), discharged.get(day))
+            for day in sorted(set(charged) | set(at_start))
+        ]
+        measured = counter_efficiency(
+            rows, coordinator.usable_capacity(), EFFICIENCY_MIN_CHARGE, EFFICIENCY_MIN_DAYS
+        )
+        if measured is not None:
+            coordinator.counter_efficiency = measured
 
     async def _seed_peaks(self) -> None:
         """Take the highest charge and discharge power from the sensors' statistics once."""
@@ -274,7 +363,13 @@ class ConsumptionForecaster:
             coordinator.profile.hours = hours
             own = [hours.get(ConsumptionProfile.hour_key(today, h)) for h in range(24)]
             if all(v is not None for v in own):
-                coordinator.archive.set_snapshot(today, PRED, own)
+                archive = coordinator.archive
+                source = coordinator.profile_source()
+                # Today's forecast is judged later. If it was made from another
+                # profile source, the one from the current source takes its place.
+                changed = archive.value(today, PRED_SOURCE) != source
+                if archive.set_snapshot(today, PRED, own, replace=changed):
+                    archive.set_value(today, PRED_SOURCE, source)
         await coordinator.async_save_archive()
         coordinator.async_schedule_save()
         coordinator.async_update_listeners()
@@ -380,3 +475,4 @@ def _predict(
         for hour, kwh in enumerate(values):
             hours[ConsumptionProfile.hour_key(day, hour)] = round(kwh, 4)
     return hours
+

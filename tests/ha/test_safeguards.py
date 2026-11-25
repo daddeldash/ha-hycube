@@ -76,7 +76,7 @@ async def test_peak_powers_are_measured_and_used(hass: HomeAssistant, api, tibbe
     model = planner.battery_model()
     assert model.grid_power == pytest.approx(3.3 / 0.95)
     assert model.discharge_power == 3.6
-    assert model.standby == 0.05
+    assert model.standby == 0.0
 
     await planner.async_update()
     attributes = state(hass, "sensor", "plan_next_grid_charge").attributes
@@ -163,7 +163,7 @@ def audited_entry(hass_storage, saved_active: float) -> MockConfigEntry:
         days[(today - timedelta(days=age)).isoformat()] = record
     days[today.isoformat()] = {"soc": 15}
     entry = MockConfigEntry(
-        domain=DOMAIN, unique_id="SN123", version=1, minor_version=2,
+        domain=DOMAIN, unique_id="SN123", version=1, minor_version=3,
         data={"host": "192.0.2.1", "username": "u", "password": "p"},
         options={"tibber_home": "Home"},
     )

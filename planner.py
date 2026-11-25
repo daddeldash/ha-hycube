@@ -12,6 +12,7 @@ import logging
 import math
 import time
 from datetime import datetime, timedelta
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant, callback
@@ -22,6 +23,8 @@ from homeassistant.util import dt as dt_util
 from .archive import ACTIVE, PRICE, PV_FORECAST, SOC
 from .const import (
     BATTERY_REST_MARGIN,
+    CAUTION_EFFICIENCY,
+    CAUTION_EFFICIENCY_MEASURED,
     CONF_CONTROL_ENABLED,
     CONF_EFFICIENCY,
     CONF_EXPORT_PRICE,
@@ -195,7 +198,12 @@ class HyCubePlanner:
             soc = battery.floor
         idle_slots = math.ceil(coordinator.release_idle_seconds() / _SLOT_SECONDS)
         self.plan = await self.hass.async_add_executor_job(
-            cautious_plan, slots, soc, battery, coordinator.mode, idle_slots
+            partial(cautious_plan, efficiency=self.efficiency_caution()),
+            slots,
+            soc,
+            battery,
+            coordinator.mode,
+            idle_slots,
         )
         self.battery = battery
         self.pv_forecast = pv is not None
@@ -397,6 +405,17 @@ class HyCubePlanner:
         if (peak := self.coordinator.charge_power()) is not None:
             return peak / GRID_CHARGE_AC_EFFICIENCY
         return float(self._options.get(CONF_GRID_CHARGE_POWER, DEFAULT_GRID_CHARGE_POWER))
+
+    def efficiency_measured(self) -> bool:
+        """The efficiency in use comes from the counters, not a guess or the option."""
+        return (
+            not self._options.get(CONF_EFFICIENCY)
+            and self.coordinator.counter_efficiency is not None
+        )
+
+    def efficiency_caution(self) -> float:
+        """Share of the efficiency the plan decides on."""
+        return CAUTION_EFFICIENCY_MEASURED if self.efficiency_measured() else CAUTION_EFFICIENCY
 
     def battery_model(self) -> Battery:
         """Battery as measured by the integration, with the plan options."""

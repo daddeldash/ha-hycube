@@ -90,9 +90,9 @@
           "tibber_home": "Empty = the only home, or the one whose price sensor the Energy dashboard uses.",
           "plan_hold": "The battery may be saved for more expensive hours. If the HyCube recharges from the grid while holding, the schedule leaves the mode out for 24 h.",
           "grid_charge_power": "Only used until the integration has measured the highest charge power itself.",
-          "efficiency": "Share of the charged energy the battery gives back. Empty = the value measured by the integration (78 % until then).",
-          "standby_power": "Power the storage system draws itself while the battery holds energy. Makes saving energy for long more expensive in the schedule.",
-          "shift_cost": "Grid charging and holding are only planned if they save more than this per kWh. Covers wear and forecast errors.",
+          "efficiency": "Share of the charged energy the battery gives back. Empty = measured from the charge and discharge counters of the last weeks (78 % until then). A value entered here replaces the measurement.",
+          "standby_power": "Only set this if the storage system measurably draws more with a charged battery than with an empty one. The HyCube does not; its trickle charge is part of the measured efficiency already.",
+          "shift_cost": "Grid charging and holding are only planned if they save at least this much more per kWh. Normally 0: the schedule tests every plan against unfavourable assumptions anyway.",
           "export_price": "Revenue per kWh fed into the grid.",
           "pv_auto_correct": "The integration compares forecast and real production of the last weeks and corrects the forecast per hour of the day.",
           "pv_factor": "Multiplies the PV forecast on top of the automatic correction. Normally 1."

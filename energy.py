@@ -11,7 +11,8 @@ Sign conventions (checked on the device: Home_P == Inv1_P + Grid_P):
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, tzinfo
 from typing import Any
 
@@ -279,3 +280,54 @@ def round_trip_efficiency(
     ):
         return None
     return round(min(1.0, max(0.5, delivered.kwh / taken.kwh)), 3)
+
+
+@dataclass(frozen=True)
+class CounterEfficiency:
+    """Round-trip efficiency from the charge and discharge counters."""
+
+    efficiency: float
+    start: date
+    end: date  # exclusive: SoC at the start of this day
+    charged: float  # kWh
+    discharged: float  # kWh
+
+
+def counter_efficiency(
+    days: Sequence[tuple[date, float | None, float | None, float | None]],
+    capacity: float,
+    min_charge: float,
+    min_days: int,
+) -> CounterEfficiency | None:
+    """Share of the charged energy that came back out, over the longest recent window.
+
+    days: (day, SoC % at its start, kWh charged, kWh discharged). The window
+    ends at the newest day with a known SoC at its start and reaches back,
+    day by day without gaps, to the oldest such day; energy left in the
+    battery at the end counts as given back. Over weeks this is what a
+    cycle really costs, including what the BMS takes to hold the reserve.
+    """
+    by_day = {d[0]: d for d in days}
+    ends = sorted(day for day, soc, _, _ in days if soc is not None)
+    if not ends:
+        return None
+    end = ends[-1]
+    start = None
+    charged = discharged = 0.0
+    day = end - timedelta(days=1)
+    span: tuple[date, float, float] | None = None
+    while day in by_day and by_day[day][2] is not None and by_day[day][3] is not None:
+        charged += by_day[day][2]
+        discharged += by_day[day][3]
+        if by_day[day][1] is not None:
+            start = day
+            span = (start, charged, discharged)
+        day -= timedelta(days=1)
+    if span is None:
+        return None
+    start, charged, discharged = span
+    if (end - start).days < min_days or charged < min_charge:
+        return None
+    stored = (by_day[end][1] - by_day[start][1]) / 100 * capacity
+    efficiency = min(max((discharged + stored) / charged, 0.5), 1.0)
+    return CounterEfficiency(round(efficiency, 3), start, end, charged, discharged)

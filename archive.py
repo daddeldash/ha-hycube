@@ -9,6 +9,7 @@ from months and years:
   export  24 hourly kWh fed into the grid
   temp    mean outdoor temperature of the day, deg C
   pred    consumption forecast as it stood at the start of the day
+  pred_src  profile source the forecast was made from
   pv_fc   PV forecast as it stood at the start of the day
   price   24 hourly grid prices, EUR/kWh
   soc     % state of charge at the start of the day
@@ -30,6 +31,7 @@ HOME = "home"
 SOLAR = "solar"
 TEMP = "temp"
 PRED = "pred"
+PRED_SOURCE = "pred_src"
 PV_FORECAST = "pv_fc"
 GRID = "grid"
 EXPORT = "export"
@@ -184,10 +186,12 @@ class Archive:
     def snapshot(self, day: date, key: str) -> list[float | None] | None:
         return self.days.get(day.isoformat(), {}).get(key)
 
-    def set_snapshot(self, day: date, key: str, hours: Hours) -> bool:
-        """Remember a forecast for a day; the first one of the day stays."""
+    def set_snapshot(
+        self, day: date, key: str, hours: Hours, *, replace: bool = False
+    ) -> bool:
+        """Remember a forecast for a day; the first one of the day stays unless replaced."""
         record = self.days.setdefault(day.isoformat(), {})
-        if key in record or (values := _clean(hours)) is None:
+        if (key in record and not replace) or (values := _clean(hours)) is None:
             return False
         record[key] = values
         self.dirty = True
@@ -198,7 +202,7 @@ class Archive:
         limit = (today - timedelta(days=SNAPSHOT_DAYS)).isoformat()
         for day, record in self.days.items():
             if day < limit and any(key in record for key in (PRED, PV_FORECAST, PRICE)):
-                for key in (PRED, PV_FORECAST, PRICE):
+                for key in (PRED, PRED_SOURCE, PV_FORECAST, PRICE):
                     record.pop(key, None)
                 self.dirty = True
 

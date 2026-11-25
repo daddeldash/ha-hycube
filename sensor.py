@@ -28,6 +28,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     BATTERY_REST_MARGIN,
+    CONF_EFFICIENCY,
     CONF_BATTERY_CAPACITY,
     DEFAULT_BATTERY_CAPACITY,
     ENERGY_BATTERY_CHARGE,
@@ -674,14 +675,22 @@ class HyCubeEfficiencySensor(HyCubeEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        est = self.coordinator.charge_capacity
+        coordinator = self.coordinator
+        est = coordinator.charge_capacity
+        measured = coordinator.counter_efficiency
+        planner = coordinator.planner
+        used = planner.battery_model().charge_eff
         return {
+            "source": "counters" if measured else ("capacity" if est.samples else None),
+            "window_start": measured.start.isoformat() if measured else None,
+            "window_end": measured.end.isoformat() if measured else None,
+            "charged_kwh": round(measured.charged, 1) if measured else None,
+            "discharged_kwh": round(measured.discharged, 1) if measured else None,
             "charge_kwh_per_100": est.kwh,
             "samples": est.samples,
-            "last_sample_kwh": est.last_sample,
-            "used_for_schedule": round(
-                self.coordinator.planner.battery_model().charge_eff * 100, 1
-            ),
+            "used_for_schedule": round(used * 100, 1),
+            "decided_with": round(used * planner.efficiency_caution() * 100, 1),
+            "set_in_options": bool(coordinator.config_entry.options.get(CONF_EFFICIENCY)),
         }
 
 
